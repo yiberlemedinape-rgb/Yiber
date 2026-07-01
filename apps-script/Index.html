@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Diagnóstico de Vibraciones Kaeser — VES004</title>
+  <style>
+    :root {
+      --kaeser: #004b8d; --kaeser2: #0a6ebd;
+      --verde: #1e9e4a; --amarillo: #e6a700; --rojo: #cc2b2b;
+      --bg: #f4f6f9; --card: #fff; --line: #dde3ea; --txt: #1b2733; --muted: #64748b;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--bg); color: var(--txt); }
+    header { background: linear-gradient(90deg, var(--kaeser), var(--kaeser2));
+      color: #fff; padding: 16px 22px; }
+    header h1 { margin: 0; font-size: 19px; }
+    header p { margin: 4px 0 0; font-size: 12px; opacity: .85; }
+    .wrap { max-width: 1100px; margin: 18px auto; padding: 0 16px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 16px; }
+    .card h2 { margin: 0 0 12px; font-size: 15px; color: var(--kaeser); }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+    input, select, textarea { width: 100%; padding: 8px; border: 1px solid var(--line);
+      border-radius: 6px; font-size: 13px; font-family: inherit; }
+    textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, monospace; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    button { background: var(--kaeser); color: #fff; border: 0; border-radius: 8px;
+      padding: 11px 16px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 14px; width: 100%; }
+    button:hover { background: var(--kaeser2); }
+    button.sec { background: #eef2f7; color: var(--kaeser); }
+    .full { grid-column: 1 / -1; }
+    .semaforo { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 10px;
+      color: #fff; font-weight: 700; font-size: 16px; }
+    .semaforo.VERDE { background: var(--verde); }
+    .semaforo.AMARILLO { background: var(--amarillo); }
+    .semaforo.ROJO { background: var(--rojo); }
+    .dot { width: 18px; height: 18px; border-radius: 50%; background: rgba(255,255,255,.85); }
+    .hallazgo { border: 1px solid var(--line); border-left: 5px solid var(--kaeser2);
+      border-radius: 8px; padding: 12px; margin-top: 10px; }
+    .hallazgo.ALTA { border-left-color: var(--rojo); }
+    .hallazgo.MEDIA { border-left-color: var(--amarillo); }
+    .hallazgo.BAJA { border-left-color: var(--verde); }
+    .hallazgo h3 { margin: 0 0 4px; font-size: 14px; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+      border-radius: 20px; background: #eef2f7; color: var(--kaeser); margin-left: 6px; }
+    .hallazgo ul { margin: 6px 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+    .accion { font-size: 12.5px; background: #f8fafc; border-radius: 6px; padding: 8px; margin-top: 6px; }
+    .freq { font-size: 12px; }
+    .freq table { width: 100%; border-collapse: collapse; }
+    .freq td, .freq th { border: 1px solid var(--line); padding: 4px 6px; text-align: left; }
+    .montaje { font-size: 12.5px; }
+    .montaje table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    .montaje td, .montaje th { border: 1px solid var(--line); padding: 5px 7px; text-align: left; }
+    .nota { font-size: 12px; color: var(--muted); background: #fff8e6; border: 1px solid #f0e0a0;
+      padding: 8px; border-radius: 6px; margin-top: 8px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .hidden { display: none; }
+    @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔧 Diagnóstico de Vibraciones — Kaeser / IFM VES004</h1>
+    <p>Motor espectral (Carta de Charlotte) + guía de montaje MA&nbsp;00-21-02.2</p>
+  </header>
+
+  <div class="wrap">
+    <!-- ================== ENTRADA ================== -->
+    <div class="card">
+      <h2>1 · Datos del equipo y medición</h2>
+
+      <div class="row">
+        <div><label>Familia de equipo</label>
+          <select id="familia"></select></div>
+        <div><label>TAG / Equipo</label>
+          <input id="tag" placeholder="Ej: CSD-102"></div>
+      </div>
+
+      <div class="row3">
+        <div><label>Sensor</label>
+          <input id="sensor" placeholder="S1..S4"></div>
+        <div><label>RPM del eje</label>
+          <input id="rpm" type="number" placeholder="2970"></div>
+        <div><label>Dirección predominante</label>
+          <select id="direccion">
+            <option value="">(sin especificar)</option>
+            <option value="radial">Radial</option>
+            <option value="axial">Axial</option>
+          </select></div>
+      </div>
+
+      <h2 style="margin-top:16px">2 · Valores globales (Monitoring)</h2>
+      <div class="row3">
+        <div><label>v-RMS (mm/s)</label><input id="vRMS" type="number" step="any"></div>
+        <div><label>a-RMS (g)</label><input id="aRMS" type="number" step="any"></div>
+        <div><label>HFD (g)</label><input id="HFD" type="number" step="any"></div>
+      </div>
+      <div class="row3">
+        <div><label>gSE (Spike Energy)</label><input id="gSE" type="number" step="any"></div>
+        <div><label>Rodamiento (ref.)</label><select id="rodamiento"></select></div>
+        <div><label>&nbsp;</label><span class="muted">Opcional para BPFO/BPFI…</span></div>
+      </div>
+
+      <h2 style="margin-top:16px">3 · Datos opcionales</h2>
+      <div class="row3">
+        <div><label>FL línea (Hz)</label><input id="FL" type="number" placeholder="60"></div>
+        <div><label>Polos motor</label><input id="polos" type="number" placeholder="2"></div>
+        <div><label>Dientes engrane</label><input id="dientes" type="number"></div>
+      </div>
+      <div class="row">
+        <div><label>Nº álabes (BPF)</label><input id="alabes" type="number"></div>
+        <div><label>&nbsp;</label><span class="muted">Correa: usa las hojas para casos avanzados.</span></div>
+      </div>
+
+      <h2 style="margin-top:16px">4 · Espectro (opcional)</h2>
+      <label>Pega el espectro exportado (frecuencia&nbsp;Hz, amplitud) — una fila por línea.
+        Acepta coma, punto y coma, tab o espacios.</label>
+      <textarea id="espectroTexto" placeholder="24.7, 0.4&#10;49.5, 2.1&#10;74.2, 0.3&#10;..."></textarea>
+
+      <label style="margin-top:10px"><input type="checkbox" id="guardar" style="width:auto"> Guardar diagnóstico en la hoja</label>
+
+      <button id="btnDiag" onclick="diagnosticar()">Diagnosticar</button>
+      <button class="sec" onclick="cargarEjemplo()">Cargar ejemplo (desalineación)</button>
+    </div>
+
+    <!-- ================== RESULTADO ================== -->
+    <div class="card">
+      <h2>Resultado</h2>
+      <div id="estado" class="muted">Completa los datos y pulsa <b>Diagnosticar</b>.
+        Como mínimo se recomienda RPM + (valores globales y/o espectro).</div>
+      <div id="resultado" class="hidden">
+        <div id="semaforo" class="semaforo"><span class="dot"></span><span id="semTxt"></span></div>
+        <div id="hallazgos"></div>
+        <details style="margin-top:12px">
+          <summary style="cursor:pointer;font-size:13px;color:var(--kaeser)">Frecuencias características</summary>
+          <div id="freq" class="freq" style="margin-top:8px"></div>
+        </details>
+      </div>
+    </div>
+
+    <!-- ================== MONTAJE ================== -->
+    <div class="card full">
+      <h2>Guía de montaje de sensores (según familia)</h2>
+      <div id="montaje" class="montaje muted">Selecciona una familia arriba.</div>
+    </div>
+  </div>
+
+  <script>
+    var CONFIG = null;
+
+    // Cargar configuración al iniciar.
+    google.script.run.withSuccessHandler(function (cfg) {
+      CONFIG = cfg;
+      var fam = document.getElementById('familia');
+      Object.keys(cfg.montaje).forEach(function (k) {
+        var o = document.createElement('option'); o.value = k; o.textContent = cfg.montaje[k].etiqueta;
+        fam.appendChild(o);
+      });
+      var rod = document.getElementById('rodamiento');
+      var vacio = document.createElement('option'); vacio.value = ''; vacio.textContent = '(ninguno)';
+      rod.appendChild(vacio);
+      cfg.rodamientos.forEach(function (r) {
+        var o = document.createElement('option'); o.value = r; o.textContent = r; rod.appendChild(o);
+      });
+      fam.onchange = pintarMontaje; pintarMontaje();
+    }).apiConfig();
+
+    function pintarMontaje() {
+      if (!CONFIG) return;
+      var fam = CONFIG.montaje[document.getElementById('familia').value];
+      var r = CONFIG.requisitos, c = CONFIG.criterios;
+      var html = '<table><tr><th>Sensor</th><th>Posición</th><th>Tipo IFM</th></tr>';
+      fam.sensores.forEach(function (s) {
+        html += '<tr><td>S' + s.n + '</td><td>' + s.pos + '</td><td>' + s.tipo + '</td></tr>';
+      });
+      html += '</table>';
+      html += '<div class="nota"><b>Requisitos:</b> Torque ' + r.torqueNm + ' Nm · ' + r.avellanado +
+        ' · Cono ' + r.conoGrados + '°. ' + r.imanZapato + '<br>' + fam.nota + '</div>';
+      html += '<div class="nota"><b>Criterios de toma VES004:</b> Monitoring ≥ ' + c.monitoringMuestrasMin +
+        ' muestras · Raw ≥ ' + c.rawMuestrasMin.toLocaleString() + ' muestras · Espectro ≥ ' +
+        c.espectroMuestrasMin + ' (1ª mitad ' + c.espectroPrimeraMitad + ', 2ª mitad ' + c.espectroSegundaMitad + ').</div>';
+      document.getElementById('montaje').innerHTML = html;
+    }
+
+    function num(id) { var v = parseFloat(document.getElementById(id).value); return isFinite(v) ? v : undefined; }
+    function val(id) { return document.getElementById(id).value; }
+
+    function diagnosticar() {
+      var payload = {
+        etiqueta: val('tag'), sensor: val('sensor'),
+        rpm: num('rpm'), direccion: val('direccion'),
+        FL: num('FL'), polos: num('polos'),
+        rodamiento: val('rodamiento') || undefined,
+        global: { vRMS: num('vRMS'), aRMS: num('aRMS'), HFD: num('HFD'), gSE: num('gSE') },
+        espectroTexto: val('espectroTexto'),
+        guardar: document.getElementById('guardar').checked
+      };
+      var d = num('dientes'); if (d) payload.engranaje = { dientes: d };
+      var a = num('alabes'); if (a) payload.alabes = { n: a };
+
+      var btn = document.getElementById('btnDiag');
+      btn.disabled = true; btn.textContent = 'Analizando…';
+      google.script.run
+        .withSuccessHandler(function (r) { btn.disabled = false; btn.textContent = 'Diagnosticar'; pintar(r); })
+        .withFailureHandler(function (e) { btn.disabled = false; btn.textContent = 'Diagnosticar';
+          document.getElementById('estado').innerHTML = '<span style="color:var(--rojo)">Error: ' + e.message + '</span>'; })
+        .apiDiagnosticar(payload);
+    }
+
+    function pintar(r) {
+      document.getElementById('estado').classList.add('hidden');
+      document.getElementById('resultado').classList.remove('hidden');
+      var sem = document.getElementById('semaforo');
+      sem.className = 'semaforo ' + r.semaforo;
+      document.getElementById('semTxt').textContent = r.resumen + '  (fr = ' + r.fr + ' Hz)';
+
+      var cont = document.getElementById('hallazgos');
+      if (!r.hallazgos.length) {
+        cont.innerHTML = '<p class="muted" style="margin-top:12px">Sin patrón espectral concluyente. ' +
+          'Revisa que el espectro y las RPM sean correctos, o apóyate en los valores globales.</p>';
+      } else {
+        cont.innerHTML = '<h2 style="margin-top:14px">Hallazgos (' + r.hallazgos.length + ')</h2>' +
+          r.hallazgos.map(function (h) {
+            return '<div class="hallazgo ' + h.severidad + '">' +
+              '<h3>' + h.tipo + (h.subtipo ? ' — ' + h.subtipo : '') +
+              '<span class="badge">' + h.confianza + '% · sev. ' + h.severidad + '</span></h3>' +
+              '<ul>' + h.evidencia.map(function (e) { return '<li>' + e + '</li>'; }).join('') + '</ul>' +
+              '<div class="accion"><b>Acción:</b> ' + h.accion + '</div></div>';
+          }).join('');
+      }
+
+      // Tabla de frecuencias.
+      var f = r.frecuencias, html = '<table><tr><th>Componente</th><th>Hz</th></tr>';
+      ['x0.5', 'x1', 'x1.5', 'x2', 'x3'].forEach(function (k) {
+        if (f[k] !== undefined) html += '<tr><td>' + k.replace('x', '') + 'X</td><td>' + f[k] + '</td></tr>';
+      });
+      if (f.rodamiento) Object.keys(f.rodamiento).forEach(function (k) {
+        html += '<tr><td>' + k + '</td><td>' + f.rodamiento[k] + '</td></tr>'; });
+      if (f.electricas) { html += '<tr><td>2·FL</td><td>' + f.electricas.dosFL + '</td></tr>' +
+        '<tr><td>Pole-pass</td><td>' + f.electricas.polePass + '</td></tr>'; }
+      if (f.GMF) html += '<tr><td>GMF</td><td>' + f.GMF + '</td></tr>';
+      if (f.BPF) html += '<tr><td>BPF</td><td>' + f.BPF + '</td></tr>';
+      html += '</table>';
+      document.getElementById('freq').innerHTML = html;
+    }
+
+    function cargarEjemplo() {
+      document.getElementById('tag').value = 'CSD-102';
+      document.getElementById('sensor').value = 'S2';
+      document.getElementById('rpm').value = 2970;      // fr = 49.5 Hz
+      document.getElementById('direccion').value = 'radial';
+      document.getElementById('vRMS').value = 5.2;
+      document.getElementById('espectroTexto').value =
+        '24.7,0.10\n49.5,1.80\n74.2,0.20\n99.0,2.60\n148.5,0.90\n198.0,0.30\n247.5,0.15';
+      diagnosticar();
+    }
+  </script>
+</body>
+</html>

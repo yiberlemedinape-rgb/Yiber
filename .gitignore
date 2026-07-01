@@ -1,0 +1,16 @@
+# clasp local (contiene el scriptId real del proyecto de cada usuario)
+.clasp.json
+.clasprc.json
+
+# Node / clasp
+node_modules/
+npm-debug.log*
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Datos crudos de vibración (no versionar: pesados/propietarios IFM)
+*.csv
+!ejemplos/*.csv
+raw_data/
