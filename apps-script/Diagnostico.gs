@@ -34,13 +34,16 @@
 function diagnosticar(medicion) {
   var m = medicion || {};
   var fr = frDesdeRPM_(m.rpm || 0);
-  var espectro = normalizarEspectro_(m.espectro);
+  var espectro = normalizarEspectro_(m.espectro);           // velocidad (mm/s) para órdenes
+  var espectroAccel = normalizarEspectro_(m.espectroAccel); // aceleración (mg) para rodamientos
   var dir = (m.direccion || '').toLowerCase();
 
   var ctx = {
     m: m, fr: fr, espectro: espectro, dir: dir,
     ruido: ruidoDeFondo_(espectro),
-    overall: energiaTotal_(espectro)
+    overall: energiaTotal_(espectro),
+    espectroAccel: espectroAccel,
+    ruidoAccel: ruidoDeFondo_(espectroAccel)
   };
 
   var hallazgos = [];
@@ -241,28 +244,39 @@ function reglaRodamientos_(ctx) {
   var gSE = Number(g.gSE) || 0, HFD = Number(g.HFD) || 0;
   var energiaAlta = gSE > UMBRALES_GSE.aceptableMax || HFD > UMBRALES_HFD.aceptableMax;
 
-  // Evidencia espectral: picos en frecuencias de defecto.
-  var defectos = [];
-  if (frec && ctx.espectro.length) {
+  // Evidencia espectral: frecuencias de defecto en cada mitad del espectro.
+  // Aparecen PRIMERO en aceleración (mg) — defecto incipiente — y luego migran
+  // al espectro de velocidad (mm/s) al agravarse (Carta de Charlotte).
+  var defVel = [];    // en velocidad → daño avanzado
+  var defAccel = [];  // solo en aceleración → incipiente
+  if (frec) {
     ['BPFO', 'BPFI', 'BSF', 'FTF'].forEach(function (k) {
-      var a = picoCerca_(ctx.espectro, frec[k], ctx.fr);
-      if (a > 3 * ctx.ruido) defectos.push(k + '@' + frec[k] + 'Hz (' + redondear_(a, 3) + ')');
+      var aV = ctx.espectro.length ? picoCerca_(ctx.espectro, frec[k], ctx.fr) : 0;
+      var aA = ctx.espectroAccel.length ? picoCerca_(ctx.espectroAccel, frec[k], ctx.fr) : 0;
+      if (aV > 3 * ctx.ruido) defVel.push(k + '@' + frec[k] + 'Hz vel(' + redondear_(aV, 3) + ')');
+      else if (aA > 3 * ctx.ruidoAccel) defAccel.push(k + '@' + frec[k] + 'Hz acc(' + redondear_(aA, 3) + ')');
     });
   }
+  var defectos = defVel.concat(defAccel);
 
   if (!energiaAlta && !defectos.length) return null;
 
-  // Estadificación (Carta de Charlotte simplificada):
+  // Estadificación (Carta de Charlotte):
   var etapa, accion, conf = 55;
-  if (defectos.length && (gSE > UMBRALES_GSE.alarmaMax || energiaTotal_(ctx.espectro) > 0 && defectos.length >= 2 && ctx.ruido > 0)) {
+  if (defVel.length && (gSE > UMBRALES_GSE.alarmaMax || defVel.length >= 2)) {
     etapa = 'Etapa 3';
     accion = 'REEMPLAZAR DE INMEDIATO. Frecuencias de defecto con armónicos/bandas ' +
-             'laterales en el espectro de velocidad.';
-    conf = 80;
-  } else if (defectos.length) {
+             'laterales visibles en el espectro de VELOCIDAD.';
+    conf = 82;
+  } else if (defVel.length) {
+    etapa = 'Etapa 2–3';
+    accion = 'Programar reemplazo a corto plazo. Defecto ya presente en velocidad; ' +
+             'aumentar la frecuencia de monitoreo.';
+    conf = 74;
+  } else if (defAccel.length) {
     etapa = 'Etapa 2';
-    accion = 'Programar reemplazo. Defecto discreto visible en aceleración con bandas ' +
-             'laterales; aumentar frecuencia de monitoreo.';
+    accion = 'Defecto discreto visible en ACELERACIÓN (mg) con bandas laterales, aún no ' +
+             'en velocidad. Programar reemplazo y vigilar evolución.';
     conf = 70;
   } else if (gSE > UMBRALES_GSE.alarmaMax || HFD > UMBRALES_HFD.alarmaMax) {
     etapa = 'Etapa 3–4';
@@ -271,15 +285,15 @@ function reglaRodamientos_(ctx) {
     conf = 72;
   } else {
     etapa = 'Etapa 1';
-    accion = 'Vigilar. Elevación ultrasónica (gSE/HFD) sin líneas discretas en velocidad. ' +
-             'Revisar lubricación.';
+    accion = 'Vigilar. Elevación ultrasónica (gSE/HFD) sin líneas discretas. Revisar lubricación.';
     conf = 60;
   }
 
   var evid = [];
   if (gSE) evid.push('gSE=' + gSE + ' (alarma>' + UMBRALES_GSE.alarmaMax + ')');
   if (HFD) evid.push('HFD=' + HFD + ' g (alarma>' + UMBRALES_HFD.alarmaMax + ')');
-  if (defectos.length) evid.push('Defectos: ' + defectos.join(', '));
+  if (defVel.length) evid.push('Defectos en velocidad: ' + defVel.join(', '));
+  if (defAccel.length) evid.push('Defectos en aceleración: ' + defAccel.join(', '));
   if (!geo) evid.push('Sin geometría de rodamiento: solo se evalúa energía de pico.');
 
   return {

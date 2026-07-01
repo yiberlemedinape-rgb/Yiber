@@ -143,6 +143,26 @@
       </div>
     </div>
 
+    <!-- ================== IMPORTAR 4 CSV ================== -->
+    <div class="card full">
+      <h2>Importar medición completa — 4 CSV (uno por sensor)</h2>
+      <p class="muted">Usa el <b>TAG</b>, <b>RPM</b> y datos opcionales del panel 1.
+        Cada archivo debe ser el espectro exportado del VES004 (1ª mitad mg,
+        2ª mitad mm/s). Se guarda en la hoja <b>Espectros</b> y se diagnostican
+        los 4 sensores.</p>
+      <div class="row">
+        <div><label>Corte aceleración / velocidad</label>
+          <select id="modoCorte">
+            <option value="auto">Automático (reinicio de frecuencia)</option>
+            <option value="mitad">Exacto a la mitad</option>
+          </select></div>
+        <div><label style="margin-top:22px"><input type="checkbox" id="guardarImp" checked style="width:auto"> Guardar en la hoja Espectros</label></div>
+      </div>
+      <div id="sensoresCarga"></div>
+      <button id="btnImp" onclick="importar()">Importar y diagnosticar los 4 sensores</button>
+      <div id="resImport" class="hidden" style="margin-top:16px"></div>
+    </div>
+
     <!-- ================== MONTAJE ================== -->
     <div class="card full">
       <h2>Guía de montaje de sensores (según familia)</h2>
@@ -167,8 +187,26 @@
       cfg.rodamientos.forEach(function (r) {
         var o = document.createElement('option'); o.value = r; o.textContent = r; rod.appendChild(o);
       });
-      fam.onchange = pintarMontaje; pintarMontaje();
+      fam.onchange = function () { pintarMontaje(); pintarCarga(); };
+      pintarMontaje(); pintarCarga();
     }).apiConfig();
+
+    // Renderiza una fila de carga por sensor de la familia (archivo + rodamiento).
+    function pintarCarga() {
+      if (!CONFIG) return;
+      var fam = CONFIG.montaje[document.getElementById('familia').value];
+      var opts = '<option value="">(rodamiento opcional)</option>' +
+        CONFIG.rodamientos.map(function (r) { return '<option value="' + r + '">' + r + '</option>'; }).join('');
+      var html = fam.sensores.map(function (s) {
+        return '<div class="montaje" style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">' +
+          '<b>S' + s.n + '</b> — ' + s.pos + ' <span class="badge">' + s.tipo + '</span>' +
+          '<div class="row" style="margin-top:6px">' +
+          '<div><label>Archivo CSV</label><input type="file" id="file_s' + s.n + '" accept=".csv,.txt"></div>' +
+          '<div><label>Rodamiento</label><select id="rod_s' + s.n + '">' + opts + '</select></div>' +
+          '</div></div>';
+      }).join('');
+      document.getElementById('sensoresCarga').innerHTML = html;
+    }
 
     function pintarMontaje() {
       if (!CONFIG) return;
@@ -258,6 +296,81 @@
       document.getElementById('espectroTexto').value =
         '24.7,0.10\n49.5,1.80\n74.2,0.20\n99.0,2.60\n148.5,0.90\n198.0,0.30\n247.5,0.15';
       diagnosticar();
+    }
+
+    /* ---------- Importación de 4 CSV (uno por sensor) ---------- */
+
+    function importar() {
+      if (!CONFIG) return;
+      var fam = CONFIG.montaje[val('familia')];
+      // Leer cada archivo (async) y armar el arreglo de sensores.
+      var proms = fam.sensores.map(function (s) {
+        return new Promise(function (resolve) {
+          var rod = document.getElementById('rod_s' + s.n);
+          var base = { n: s.n, nombre: 'S' + s.n, pos: s.pos, tipo: s.tipo, rodamiento: rod ? rod.value : '' };
+          var inp = document.getElementById('file_s' + s.n);
+          if (!inp || !inp.files || !inp.files[0]) { base.contenido = ''; resolve(base); return; }
+          var fr = new FileReader();
+          fr.onload = function (e) { base.contenido = e.target.result; resolve(base); };
+          fr.onerror = function () { base.contenido = ''; resolve(base); };
+          fr.readAsText(inp.files[0]);
+        });
+      });
+
+      var btn = document.getElementById('btnImp');
+      btn.disabled = true; btn.textContent = 'Importando…';
+      Promise.all(proms).then(function (sensores) {
+        if (!sensores.some(function (s) { return s.contenido; })) {
+          btn.disabled = false; btn.textContent = 'Importar y diagnosticar los 4 sensores';
+          alert('Selecciona al menos un archivo CSV.'); return;
+        }
+        var payload = {
+          etiqueta: val('tag'), rpm: num('rpm'), FL: num('FL'), polos: num('polos'),
+          rodamiento: val('rodamiento') || undefined,
+          modoCorte: val('modoCorte'),
+          guardar: document.getElementById('guardarImp').checked,
+          sensores: sensores
+        };
+        google.script.run
+          .withSuccessHandler(function (r) { btn.disabled = false; btn.textContent = 'Importar y diagnosticar los 4 sensores'; pintarImport(r); })
+          .withFailureHandler(function (e) { btn.disabled = false; btn.textContent = 'Importar y diagnosticar los 4 sensores';
+            document.getElementById('resImport').classList.remove('hidden');
+            document.getElementById('resImport').innerHTML = '<span style="color:var(--rojo)">Error: ' + e.message + '</span>'; })
+          .apiImportarSensores(payload);
+      });
+    }
+
+    function pintarImport(r) {
+      var cont = document.getElementById('resImport');
+      cont.classList.remove('hidden');
+      var html = '<div class="semaforo ' + r.general + '"><span class="dot"></span>' +
+        '<span>Estado consolidado del equipo: ' + r.general + '</span></div>';
+
+      r.porSensor.forEach(function (s) {
+        html += '<div class="hallazgo" style="border-left-color:var(--kaeser2);margin-top:12px">';
+        html += '<h3>' + s.sensor + ' — ' + (s.pos || '') +
+          (s.tipo ? ' <span class="badge">' + s.tipo + '</span>' : '') + '</h3>';
+        if (s.vacio) { html += '<p class="muted">Sin archivo cargado.</p></div>'; return; }
+        html += '<div style="margin:4px 0"><span class="badge" style="background:var(--' +
+          (s.semaforo === 'ROJO' ? 'rojo' : s.semaforo === 'AMARILLO' ? 'amarillo' : 'verde') +
+          ');color:#fff">' + s.semaforo + '</span> ' + s.resumen + '</div>';
+        html += '<p class="muted">Líneas: ' + s.nAccel + ' mg + ' + s.nVel + ' mm/s · v-RMS estimado: ' +
+          (s.vRMS_est == null ? '—' : s.vRMS_est + ' mm/s') + '</p>';
+        if (s.aviso) html += '<div class="nota">⚠️ ' + s.aviso + '</div>';
+        if (s.hallazgos && s.hallazgos.length) {
+          html += s.hallazgos.map(function (h) {
+            return '<div class="hallazgo ' + h.severidad + '" style="margin-top:8px">' +
+              '<h3>' + h.tipo + (h.subtipo ? ' — ' + h.subtipo : '') +
+              '<span class="badge">' + h.confianza + '% · sev. ' + h.severidad + '</span></h3>' +
+              '<ul>' + h.evidencia.map(function (e) { return '<li>' + e + '</li>'; }).join('') + '</ul>' +
+              '<div class="accion"><b>Acción:</b> ' + h.accion + '</div></div>';
+          }).join('');
+        } else {
+          html += '<p class="muted">Sin patrón espectral concluyente.</p>';
+        }
+        html += '</div>';
+      });
+      cont.innerHTML = html;
     }
   </script>
 </body>

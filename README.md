@@ -82,10 +82,11 @@ apps-script/
   Config.gs            Catálogo: montaje, rodamientos, umbrales, constantes
   Frecuencias.gs       Calculadora de frecuencias de defecto
   Diagnostico.gs       Motor de reglas (Carta de Charlotte)
+  Importar.gs          Importación de 4 CSV (uno por sensor) + reporte consolidado
   Code.gs              Menú Sheets, doGet (web), API HTML, parser CSV, hojas
   Index.html           Interfaz web (formulario + reporte)
 .clasp.json.example    Plantilla clasp (copiar a .clasp.json con tu scriptId)
-ejemplos/              CSV de espectro de ejemplo
+ejemplos/              CSV de espectro de ejemplo (incl. medicion_CSD102_S1..S4.csv)
 ```
 
 ---
@@ -140,6 +141,32 @@ En el editor de Apps Script / la hoja:
 
 El botón *Cargar ejemplo* usa `ejemplos/espectro_desalineacion_CSD102.csv`.
 
+### 5.1 Importar una medición completa (4 CSV, uno por sensor)
+
+Flujo estándar de campo: cada medición produce **4 archivos, uno por sensor**
+(S1–S4). En el panel *Importar medición completa*:
+
+1. Elige la **familia** (define qué es S1..S4 y muestra su posición/tipo).
+2. Completa **TAG** y **RPM** (panel 1). Opcional: FL/polos, y **rodamiento por
+   sensor** (motor y airend suelen llevar rodamientos distintos).
+3. Carga los 4 CSV. Cada archivo es un espectro del VES004 con **1ª mitad `mg`
+   (aceleración) y 2ª mitad `mm/s` (velocidad)**.
+4. **Corte accel/vel**: *Automático* detecta el reinicio del eje de frecuencia
+   entre las dos mitades; *Exacto a la mitad* corta en total/2.
+5. *Importar y diagnosticar los 4 sensores* → guarda el espectro en la hoja
+   `Espectros` (etiquetado por unidad) y muestra un **reporte consolidado**:
+   semáforo del equipo (el peor de los 4) + diagnóstico por sensor.
+
+El motor analiza los **órdenes** (1X/2X, holguras…) sobre la mitad de
+**velocidad** y refuerza la evidencia de **rodamiento** con la mitad de
+**aceleración**: un defecto que aparece solo en `mg` se clasifica como
+**incipiente (Etapa 2)**, y cuando migra a `mm/s` como **avanzado (Etapa 3 →
+reemplazar)**. Detecta además la "franja recta" (amplitud casi constante) que
+indica falla de cable/ajuste/posición del sensor.
+
+Archivos de ejemplo: `ejemplos/medicion_CSD102_S1..S4.csv` (S1 desalineación,
+S2 normal, S3 rodamiento incipiente, S4 rodamiento avanzado).
+
 ---
 
 ## 6. Calibración y próximos pasos
@@ -148,8 +175,9 @@ El botón *Cargar ejemplo* usa `ejemplos/espectro_desalineacion_CSD102.csv`.
   parameter set real de cada equipo (Kaeser define límites por máquina).
 - **Rodamientos**: agrega referencias en la hoja `Rodamientos`
   (Nb, Bd, Pd, θ) para ampliar la base de frecuencias de defecto.
-- **CSV real del VES004**: al disponer de un export real, se ajusta
-  `parseEspectro` para separar automáticamente la mitad de aceleración (`mg`)
-  de la de velocidad (`mm/s`) y mapear objetos de medición a sensores.
-- Pendiente sugerido: importación masiva de CSV a `Espectros`/`Mediciones` y
-  gráficos de tendencia por equipo/sensor.
+- **CSV real del VES004**: al disponer de un export real, se ajusta el corte
+  accel/vel y el mapeo de columnas (`parseEspectro` / `partirEspectro_`). Si el
+  export incluye una columna de unidad (`mg`/`mm/s`) por fila, el corte se
+  vuelve trivial.
+- Pendiente sugerido: gráficos de tendencia por equipo/sensor a partir del
+  histórico acumulado en `Espectros`/`Diagnostico`.
