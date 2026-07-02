@@ -96,8 +96,8 @@ cada sensor — con ella calcula órdenes y frecuencias de defecto correctos.
 `Inicializar hojas` siembra datos de **EJEMPLO** (CSD-102 lubricado y DSG-220
 engranado) para mostrar la estructura; reemplázalos por los valores reales de
 Kaeser Colombia. Los límites de aceleración condenatorios se comparan contra el
-**a-RMS (g) del Monitoring** del VES004; el a-RMS estimado del espectro es solo
-un apoyo.
+**a-RMS (g) del Monitoring** del VES004 (ver §5.2); el a-RMS estimado del
+espectro es solo un apoyo cuando no se carga el Monitoring.
 
 ---
 
@@ -111,6 +111,7 @@ apps-script/
   Diagnostico.gs       Motor de reglas (Carta de Charlotte) + límites por posición
   Frecuencias.gs       Calculadora de frecuencias de defecto
   BaseDatos.gs         Acceso a la BD: apiListaEquipos / apiEquipo (resuelve por sensor)
+  Monitoring.gs        Parser del CSV de Monitoring (v/a-RMS, gSE, HFD, rpm reales)
   Importar.gs          Importación de 4 CSV (uno por sensor) + reporte consolidado
   Code.gs              Menú Sheets, doGet (web), API HTML, parser CSV, hojas
   Index.html           Interfaz web (selector de equipo + carga + reporte)
@@ -145,8 +146,9 @@ clasp open
 
 En el editor de Apps Script / la hoja:
 
-1. Menú **🔧 Diagnóstico Kaeser → Inicializar hojas** (crea Equipos, Sensores,
-   Mediciones, Espectros, Diagnostico, Umbrales, Rodamientos).
+1. Menú **🔧 Diagnóstico Kaeser → Inicializar hojas** (crea Equipos, Posiciones,
+   UnidadesCompresoras, Motores, Sensores, Mediciones, Espectros, Diagnostico,
+   Umbrales, Rodamientos, con datos de ejemplo).
 2. **Deploy → New deployment → Web app** (ejecutar como *tú*, acceso según tu
    organización). Copia la URL: esa es la interfaz de diagnóstico.
 
@@ -196,6 +198,27 @@ indica falla de cable/ajuste/posición del sensor.
 
 Archivos de ejemplo: `ejemplos/medicion_CSD102_S1..S4.csv` (S1 desalineación,
 S2 normal, S3 rodamiento incipiente, S4 rodamiento avanzado).
+
+### 5.2 CSV de Monitoring (valores globales reales)
+
+Además del espectro, cada sensor admite (opcional) su **CSV de Monitoring** del
+VES004 (§7.1): la serie temporal de valores globales. El sistema:
+
+- Detecta las columnas por su encabezado (**v-RMS, a-RMS (g), HFD, gSE,
+  temperatura, rpm/speed**), en cualquier orden y con separador coma/`;`/tab.
+- Toma la **mediana** de la ventana como valor representativo (robusta frente a
+  transitorios) y reporta el máximo.
+- Usa esos **valores reales** para el semáforo (por encima del estimado del
+  espectro), de modo que los límites **condenatorios en g y gSE** se evalúan
+  contra lo medido.
+- Toma la **RPM del Monitoring como velocidad real del motor** (señal 4–20 mA) —
+  clave con variador — y deriva la RPM de cada etapa con su relación.
+- Heurística de unidad: si el a-RMS "en g" es absurdamente alto, asume mg y
+  convierte a g avisando.
+
+El reporte etiqueta cada sensor con la fuente de los valores: *Monitoring (real)*
+o *estimado del espectro*. Archivos de ejemplo:
+`ejemplos/monitoring_CSD102_S1..S4.csv`.
 
 ---
 

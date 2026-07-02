@@ -35,14 +35,30 @@ function apiImportarSensores(payload) {
   var posPorSensor = {};
   if (resuelto) resuelto.posiciones.forEach(function (x) { posPorSensor[x.sensor] = x; });
 
-  var ss = null, shEsp = null;
+  var ss = null, shEsp = null, shMed = null;
   if (p.guardar) {
     ss = SpreadsheetApp.getActiveSpreadsheet();
     shEsp = ss.getSheetByName(HOJAS.ESPECTROS) || ss.insertSheet(HOJAS.ESPECTROS);
     if (shEsp.getLastRow() === 0) {
       shEsp.appendRow(['Fecha', 'TAG', 'Sensor', 'Frecuencia_Hz', 'Amplitud', 'Unidad']);
     }
+    shMed = ss.getSheetByName(HOJAS.MEDICIONES) || ss.insertSheet(HOJAS.MEDICIONES);
+    if (shMed.getLastRow() === 0) {
+      shMed.appendRow(['Fecha', 'TAG', 'Sensor', 'RPM', 'vRMS_mm_s', 'aRMS_g', 'HFD_g', 'gSE', 'Direccion', 'Rodamiento']);
+    }
   }
+
+  // Pre-escaneo del Monitoring: la señal de velocidad (4–20 mA) es única para
+  // la máquina, así que la RPM del Monitoring es la del MOTOR. Se toma como
+  // referencia y luego se multiplica por la relación de cada etapa.
+  var motorRpmMon = null;
+  sensores.forEach(function (s) {
+    if (s && s.monitoring && String(s.monitoring).trim()) {
+      s._mon = parseMonitoring(s.monitoring);
+      if (motorRpmMon == null && isFinite(s._mon.rpm)) motorRpmMon = s._mon.rpm;
+    }
+  });
+  var motorRpmEfectivo = numOr_(motorRpmMon, equipo.rpmMotor, p.rpm);
 
   var porSensor = sensores.map(function (s) {
     s = s || {};
@@ -52,6 +68,7 @@ function apiImportarSensores(payload) {
     if (!s.contenido || !String(s.contenido).trim()) {
       return { sensor: nombre, n: s.n, pos: posTxt, tipo: s.tipo, vacio: true };
     }
+    var mon = s._mon || {};
 
     var todas = parseEspectro(s.contenido);          // orden de archivo (sin ordenar)
     var partes = partirEspectro_(todas, p.modoCorte); // {accel:[], vel:[]}
@@ -65,8 +82,10 @@ function apiImportarSensores(payload) {
       if (filas.length) shEsp.getRange(shEsp.getLastRow() + 1, 1, filas.length, 6).setValues(filas);
     }
 
-    // Resolver parámetros por posición (override manual > BD > payload global).
-    var rpm = numOr_(s.rpm, pos ? pos.rpm : null, p.rpm);
+    // RPM de la posición: manual > (RPM motor efectiva × relación de etapa) > p.rpm.
+    var relacion = pos ? (pos.relacion || 1) : 1;
+    var rpm = numOr_(s.rpm, motorRpmEfectivo ? motorRpmEfectivo * relacion : null, p.rpm);
+
     var rodamiento = s.rodamiento || (pos && pos.rodamiento) || p.rodamiento || undefined;
     var limites = s.limites || (pos && pos.limites) || p.limites || {};
     var FL = numOr_(p.FL, equipo.FL, null);
@@ -74,11 +93,17 @@ function apiImportarSensores(payload) {
     var dientes = numOr_(s.dientes, pos ? pos.nDientes : null, null);
     var lobulos = numOr_(s.alabes, pos ? pos.nLobulos : null, null);
 
-    // Globales estimados del espectro: v-RMS (mm/s) de velocidad, a-RMS (g) de
-    // aceleración (mg → g). gSE/HFD si el usuario los proporcionó.
-    var vRMS = overallRMS_(partes.vel);
+    // Globales: se prefieren los REALES del Monitoring; si no, el estimado del
+    // espectro (v-RMS de velocidad; a-RMS en g desde la mitad de aceleración mg).
+    var vRMSest = overallRMS_(partes.vel);
     var aRMSmg = overallRMS_(partes.accel);
-    var aRMSg = (aRMSmg === undefined) ? undefined : aRMSmg / 1000;
+    var aRMSest = (aRMSmg === undefined) ? undefined : aRMSmg / 1000;
+
+    var vRMS = numOr_(mon.vRMS, vRMSest);
+    var aRMS = numOr_(mon.aRMS, aRMSest);
+    var gSE = numOr_(mon.gSE, (s.gSE !== undefined && s.gSE !== '') ? Number(s.gSE) : null);
+    var HFD = numOr_(mon.HFD, (s.HFD !== undefined && s.HFD !== '') ? Number(s.HFD) : null);
+    var hayMon = isFinite(mon.vRMS) || isFinite(mon.aRMS) || isFinite(mon.gSE) || isFinite(mon.HFD);
 
     var medicion = {
       rpm: rpm, FL: FL, polos: polos,
@@ -87,11 +112,7 @@ function apiImportarSensores(payload) {
       espectroAccel: partes.accel,
       direccion: s.direccion || '',
       limites: limites,
-      global: {
-        vRMS: vRMS, aRMS: aRMSg,
-        gSE: (s.gSE !== undefined && s.gSE !== '') ? Number(s.gSE) : undefined,
-        HFD: (s.HFD !== undefined && s.HFD !== '') ? Number(s.HFD) : undefined
-      },
+      global: { vRMS: vRMS, aRMS: aRMS, gSE: gSE, HFD: HFD },
       engranaje: dientes ? { dientes: dientes } : undefined,
       alabes: lobulos ? { n: lobulos } : undefined
     };
@@ -99,16 +120,30 @@ function apiImportarSensores(payload) {
     var diag = diagnosticar(medicion);
     if (p.guardar) {
       try { guardarDiagnostico_({ etiqueta: etiqueta, sensor: nombre, rpm: rpm }, diag); } catch (e) {}
+      if (shMed) {
+        try {
+          shMed.appendRow([fecha, etiqueta, nombre, rpm,
+            vRMS == null ? '' : redondear_(vRMS, 3),
+            aRMS == null ? '' : redondear_(aRMS, 4),
+            HFD == null ? '' : HFD, gSE == null ? '' : gSE,
+            s.direccion || '', rodamiento || '']);
+        } catch (e) {}
+      }
     }
+
+    var avisos = [aviso].concat(mon._avisos || []).filter(function (x) { return x; });
 
     return {
       sensor: nombre, n: s.n, pos: posTxt, tipo: s.tipo,
       rpm: rpm, rodamiento: rodamiento,
       nAccel: partes.accel.length, nVel: partes.vel.length,
-      vRMS_est: (vRMS === undefined ? null : redondear_(vRMS, 3)),
-      aRMS_est: (aRMSg === undefined ? null : redondear_(aRMSg, 3)),
+      fuenteGlobal: hayMon ? 'Monitoring (real)' : 'estimado del espectro',
+      rpmReal: isFinite(mon.rpm) ? mon.rpm : null,
+      vRMS_val: (vRMS == null ? null : redondear_(vRMS, 3)),
+      aRMS_val: (aRMS == null ? null : redondear_(aRMS, 4)),
+      gSE_val: (gSE == null ? null : gSE),
       limites: diag.limites,
-      aviso: aviso,
+      aviso: avisos.join(' '),
       semaforo: diag.semaforo, resumen: diag.resumen,
       hallazgos: diag.hallazgos, frecuencias: diag.frecuencias
     };

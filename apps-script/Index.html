@@ -262,9 +262,14 @@
           '<b>S' + it.n + '</b> — ' + it.pos + ' <span class="badge">' + it.tipo + '</span>' +
           (it.extra ? '<div class="muted" style="margin-top:4px">' + it.extra + '</div>' : '') +
           '<div class="row" style="margin-top:6px">' +
-          '<div><label>Archivo CSV</label><input type="file" id="file_s' + it.n + '" accept=".csv,.txt"></div>' +
+          '<div><label>CSV Espectro</label><input type="file" id="file_s' + it.n + '" accept=".csv,.txt"></div>' +
           '<div><label>Rodamiento</label>' + rodCtl + '</div>' +
-          '</div></div>';
+          '</div>' +
+          '<div class="row" style="margin-top:6px">' +
+          '<div><label>CSV Monitoring (opcional — v/a-RMS, gSE, rpm reales)</label>' +
+          '<input type="file" id="mon_s' + it.n + '" accept=".csv,.txt"></div>' +
+          '<div></div></div>' +
+          '</div>';
       }).join('');
     }
 
@@ -360,6 +365,18 @@
 
     /* ---------- Importación de 4 CSV (uno por sensor) ---------- */
 
+    // Lee un input file como texto; resuelve '' si no hay archivo.
+    function leerArchivo_(id) {
+      return new Promise(function (resolve) {
+        var inp = document.getElementById(id);
+        if (!inp || !inp.files || !inp.files[0]) { resolve(''); return; }
+        var fr = new FileReader();
+        fr.onload = function (e) { resolve(e.target.result); };
+        fr.onerror = function () { resolve(''); };
+        fr.readAsText(inp.files[0]);
+      });
+    }
+
     function importar() {
       if (!CONFIG) return;
       // Definir los sensores a recorrer: de la BD si hay equipo, si no de la familia.
@@ -367,17 +384,15 @@
         ? EQUIPO.posiciones.map(function (p) { return { n: p.sensor, pos: p.posicion, tipo: p.unidad }; })
         : CONFIG.montaje[val('familia')].sensores.map(function (s) { return { n: s.n, pos: s.pos, tipo: s.tipo }; });
 
-      // Leer cada archivo (async) y armar el arreglo de sensores.
+      // Leer archivos (async): espectro + Monitoring (opcional) por sensor.
       var proms = lista.map(function (s) {
-        return new Promise(function (resolve) {
-          var rod = document.getElementById('rod_s' + s.n);
-          var base = { n: s.n, nombre: 'S' + s.n, pos: s.pos, tipo: s.tipo, rodamiento: rod ? rod.value : '' };
-          var inp = document.getElementById('file_s' + s.n);
-          if (!inp || !inp.files || !inp.files[0]) { base.contenido = ''; resolve(base); return; }
-          var fr = new FileReader();
-          fr.onload = function (e) { base.contenido = e.target.result; resolve(base); };
-          fr.onerror = function () { base.contenido = ''; resolve(base); };
-          fr.readAsText(inp.files[0]);
+        var rod = document.getElementById('rod_s' + s.n);
+        var base = { n: s.n, nombre: 'S' + s.n, pos: s.pos, tipo: s.tipo, rodamiento: rod ? rod.value : '' };
+        return Promise.all([
+          leerArchivo_('file_s' + s.n),
+          leerArchivo_('mon_s' + s.n)
+        ]).then(function (txt) {
+          base.contenido = txt[0]; base.monitoring = txt[1]; return base;
         });
       });
 
@@ -420,12 +435,16 @@
           (s.semaforo === 'ROJO' ? 'rojo' : s.semaforo === 'AMARILLO' ? 'amarillo' : 'verde') +
           ');color:#fff">' + s.semaforo + '</span> ' + s.resumen + '</div>';
         var L = s.limites || {};
-        html += '<p class="muted">RPM ' + (s.rpm || '—') + ' · rod. ' + (s.rodamiento || '—') +
-          ' · líneas ' + s.nAccel + ' mg + ' + s.nVel + ' mm/s<br>' +
-          'v-RMS est. <b>' + (s.vRMS_est == null ? '—' : s.vRMS_est) + '</b> mm/s (límite ' +
-          (L.velAviso || '—') + '/' + (L.velCond || '—') + ') · a-RMS est. <b>' +
-          (s.aRMS_est == null ? '—' : s.aRMS_est) + '</b> g (límite ' +
-          (L.acelAviso || '—') + '/' + (L.acelCond || '—') + ')</p>';
+        html += '<p class="muted">RPM ' + (s.rpm || '—') +
+          (s.rpmReal ? ' <span class="badge">motor real ' + s.rpmReal + '</span>' : '') +
+          ' · rod. ' + (s.rodamiento || '—') + ' · líneas ' + s.nAccel + ' mg + ' + s.nVel + ' mm/s' +
+          ' · valores: <b>' + s.fuenteGlobal + '</b><br>' +
+          'v-RMS <b>' + (s.vRMS_val == null ? '—' : s.vRMS_val) + '</b> mm/s (límite ' +
+          (L.velAviso || '—') + '/' + (L.velCond || '—') + ') · a-RMS <b>' +
+          (s.aRMS_val == null ? '—' : s.aRMS_val) + '</b> g (límite ' +
+          (L.acelAviso || '—') + '/' + (L.acelCond || '—') + ')' +
+          (s.gSE_val == null ? '' : ' · gSE <b>' + s.gSE_val + '</b> (límite ' + (L.gseAviso || '—') + '/' + (L.gseCond || '—') + ')') +
+          '</p>';
         if (s.aviso) html += '<div class="nota">⚠️ ' + s.aviso + '</div>';
         if (s.hallazgos && s.hallazgos.length) {
           html += s.hallazgos.map(function (h) {
