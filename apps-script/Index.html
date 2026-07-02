@@ -75,16 +75,22 @@
       <h2>1 · Datos del equipo y medición</h2>
 
       <div class="row">
-        <div><label>Familia de equipo</label>
-          <select id="familia"></select></div>
+        <div><label>Equipo (base de datos)</label>
+          <select id="equipoSel"><option value="">(selección manual)</option></select></div>
         <div><label>TAG / Equipo</label>
           <input id="tag" placeholder="Ej: CSD-102"></div>
+      </div>
+      <div class="row">
+        <div><label>Familia de equipo</label>
+          <select id="familia"></select></div>
+        <div><label>&nbsp;</label>
+          <span class="muted" id="equipoInfo">Elige un equipo para autocompletar sensores y límites, o trabaja manual.</span></div>
       </div>
 
       <div class="row3">
         <div><label>Sensor</label>
           <input id="sensor" placeholder="S1..S4"></div>
-        <div><label>RPM del eje</label>
+        <div><label>RPM motor</label>
           <input id="rpm" type="number" placeholder="2970"></div>
         <div><label>Dirección predominante</label>
           <select id="direccion">
@@ -172,6 +178,38 @@
 
   <script>
     var CONFIG = null;
+    var EQUIPO = null;   // equipo resuelto desde la BD (o null en modo manual)
+
+    // Cargar lista de equipos de la BD.
+    google.script.run.withSuccessHandler(function (lista) {
+      var sel = document.getElementById('equipoSel');
+      (lista || []).forEach(function (e) {
+        var o = document.createElement('option');
+        o.value = e.tag; o.textContent = e.tag + (e.serie ? ' — ' + e.serie : '');
+        sel.appendChild(o);
+      });
+      sel.onchange = cargarEquipo;
+    }).apiListaEquipos();
+
+    function cargarEquipo() {
+      var tag = document.getElementById('equipoSel').value;
+      if (!tag) { EQUIPO = null; document.getElementById('equipoInfo').textContent = 'Modo manual.'; pintarCarga(); return; }
+      google.script.run.withSuccessHandler(function (r) {
+        EQUIPO = r;
+        if (!r) { document.getElementById('equipoInfo').textContent = 'Equipo no encontrado.'; return; }
+        document.getElementById('tag').value = r.equipo.tag;
+        document.getElementById('rpm').value = r.equipo.rpmMotor || '';
+        if (r.equipo.FL) document.getElementById('FL').value = r.equipo.FL;
+        if (r.equipo.polos) document.getElementById('polos').value = r.equipo.polos;
+        // Ajustar familia si coincide.
+        var fam = document.getElementById('familia');
+        for (var i = 0; i < fam.options.length; i++) if (fam.options[i].value === r.equipo.familia) fam.selectedIndex = i;
+        document.getElementById('equipoInfo').innerHTML = 'Airend <b>' + r.equipo.airend + '</b> · Motor <b>' +
+          r.equipo.motor + '</b> · ' + (r.equipo.variador === 'Sí' ? 'con variador' : 'velocidad fija') +
+          ' · Arranque ' + r.equipo.arranque;
+        pintarMontaje(); pintarCarga();
+      }).apiEquipo(tag);
+    }
 
     // Cargar configuración al iniciar.
     google.script.run.withSuccessHandler(function (cfg) {
@@ -191,21 +229,43 @@
       pintarMontaje(); pintarCarga();
     }).apiConfig();
 
-    // Renderiza una fila de carga por sensor de la familia (archivo + rodamiento).
+    // Renderiza una fila de carga por sensor. Si hay equipo de la BD, usa sus
+    // posiciones (rodamiento, RPM por etapa y límites); si no, la plantilla de familia.
     function pintarCarga() {
       if (!CONFIG) return;
-      var fam = CONFIG.montaje[document.getElementById('familia').value];
       var opts = '<option value="">(rodamiento opcional)</option>' +
         CONFIG.rodamientos.map(function (r) { return '<option value="' + r + '">' + r + '</option>'; }).join('');
-      var html = fam.sensores.map(function (s) {
+
+      var items;
+      if (EQUIPO && EQUIPO.posiciones && EQUIPO.posiciones.length) {
+        items = EQUIPO.posiciones.map(function (p) {
+          var L = p.limites || {};
+          var lim = 'Límites: vel ' + (L.velAviso || '—') + '/' + (L.velCond || '—') + ' mm/s · acel ' +
+            (L.acelAviso || '—') + '/' + (L.acelCond || '—') + ' g (aviso/cond)';
+          return {
+            n: p.sensor, pos: p.posicion, tipo: p.unidad,
+            extra: 'Rodamiento <b>' + (p.rodamiento || '—') + '</b> · RPM etapa <b>' + p.rpm +
+              '</b> (×' + p.relacion + ')<br><span class="muted">' + lim + '</span>',
+            rodFijo: p.rodamiento
+          };
+        });
+      } else {
+        var fam = CONFIG.montaje[document.getElementById('familia').value];
+        items = fam.sensores.map(function (s) { return { n: s.n, pos: s.pos, tipo: s.tipo, extra: '', rodFijo: '' }; });
+      }
+
+      document.getElementById('sensoresCarga').innerHTML = items.map(function (it) {
+        var rodCtl = it.rodFijo
+          ? '<span class="muted">' + it.rodFijo + ' (de la BD)</span><input type="hidden" id="rod_s' + it.n + '" value="' + it.rodFijo + '">'
+          : '<select id="rod_s' + it.n + '">' + opts + '</select>';
         return '<div class="montaje" style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">' +
-          '<b>S' + s.n + '</b> — ' + s.pos + ' <span class="badge">' + s.tipo + '</span>' +
+          '<b>S' + it.n + '</b> — ' + it.pos + ' <span class="badge">' + it.tipo + '</span>' +
+          (it.extra ? '<div class="muted" style="margin-top:4px">' + it.extra + '</div>' : '') +
           '<div class="row" style="margin-top:6px">' +
-          '<div><label>Archivo CSV</label><input type="file" id="file_s' + s.n + '" accept=".csv,.txt"></div>' +
-          '<div><label>Rodamiento</label><select id="rod_s' + s.n + '">' + opts + '</select></div>' +
+          '<div><label>Archivo CSV</label><input type="file" id="file_s' + it.n + '" accept=".csv,.txt"></div>' +
+          '<div><label>Rodamiento</label>' + rodCtl + '</div>' +
           '</div></div>';
       }).join('');
-      document.getElementById('sensoresCarga').innerHTML = html;
     }
 
     function pintarMontaje() {
@@ -302,9 +362,13 @@
 
     function importar() {
       if (!CONFIG) return;
-      var fam = CONFIG.montaje[val('familia')];
+      // Definir los sensores a recorrer: de la BD si hay equipo, si no de la familia.
+      var lista = (EQUIPO && EQUIPO.posiciones && EQUIPO.posiciones.length)
+        ? EQUIPO.posiciones.map(function (p) { return { n: p.sensor, pos: p.posicion, tipo: p.unidad }; })
+        : CONFIG.montaje[val('familia')].sensores.map(function (s) { return { n: s.n, pos: s.pos, tipo: s.tipo }; });
+
       // Leer cada archivo (async) y armar el arreglo de sensores.
-      var proms = fam.sensores.map(function (s) {
+      var proms = lista.map(function (s) {
         return new Promise(function (resolve) {
           var rod = document.getElementById('rod_s' + s.n);
           var base = { n: s.n, nombre: 'S' + s.n, pos: s.pos, tipo: s.tipo, rodamiento: rod ? rod.value : '' };
@@ -325,6 +389,7 @@
           alert('Selecciona al menos un archivo CSV.'); return;
         }
         var payload = {
+          tag: (EQUIPO ? EQUIPO.equipo.tag : (val('tag') || undefined)),
           etiqueta: val('tag'), rpm: num('rpm'), FL: num('FL'), polos: num('polos'),
           rodamiento: val('rodamiento') || undefined,
           modoCorte: val('modoCorte'),
@@ -354,8 +419,13 @@
         html += '<div style="margin:4px 0"><span class="badge" style="background:var(--' +
           (s.semaforo === 'ROJO' ? 'rojo' : s.semaforo === 'AMARILLO' ? 'amarillo' : 'verde') +
           ');color:#fff">' + s.semaforo + '</span> ' + s.resumen + '</div>';
-        html += '<p class="muted">Líneas: ' + s.nAccel + ' mg + ' + s.nVel + ' mm/s · v-RMS estimado: ' +
-          (s.vRMS_est == null ? '—' : s.vRMS_est + ' mm/s') + '</p>';
+        var L = s.limites || {};
+        html += '<p class="muted">RPM ' + (s.rpm || '—') + ' · rod. ' + (s.rodamiento || '—') +
+          ' · líneas ' + s.nAccel + ' mg + ' + s.nVel + ' mm/s<br>' +
+          'v-RMS est. <b>' + (s.vRMS_est == null ? '—' : s.vRMS_est) + '</b> mm/s (límite ' +
+          (L.velAviso || '—') + '/' + (L.velCond || '—') + ') · a-RMS est. <b>' +
+          (s.aRMS_est == null ? '—' : s.aRMS_est) + '</b> g (límite ' +
+          (L.acelAviso || '—') + '/' + (L.acelCond || '—') + ')</p>';
         if (s.aviso) html += '<div class="nota">⚠️ ' + s.aviso + '</div>';
         if (s.hallazgos && s.hallazgos.length) {
           html += s.hallazgos.map(function (h) {

@@ -68,9 +68,36 @@ Implementado en `Diagnostico.gs`. Cada regla devuelve tipo, subtipo,
 Frecuencias características calculadas en `Frecuencias.gs`
 (BPFO/BPFI/BSF/FTF/BDF, GMF, BPF, correa, eléctricas).
 
-El **semáforo global** prioriza los valores globales medidos (v-RMS estilo
-ISO 10816-3, gSE) y fuerza rojo ante rodamiento en Etapa 3+.
-Umbrales por defecto en `Config.gs` y editables en la hoja `Umbrales`.
+El **semáforo** compara los valores globales medidos contra los **límites de la
+posición**: nivel de **aviso** (amarillo) y **condenatorio** (rojo), en
+**velocidad (mm/s)** y **aceleración (g RMS)**, más gSE. Un rodamiento en
+Etapa 3+ fuerza rojo. Si un equipo no tiene límites definidos, se usan los
+defaults de `Config.gs`.
+
+---
+
+## 2.1 Base de datos (fuente de verdad por posición)
+
+El rodamiento, la velocidad y los límites **dependen de la posición de
+medición**, no del equipo en bloque. La BD está normalizada en hojas:
+
+| Hoja | Rol |
+|---|---|
+| `Equipos` | TAG → familia, airend, motor, RPM motor, variador, FL, polos, arranque |
+| `Posiciones` | **Fuente de verdad por sensor**: rodamiento, relación de transmisión, límites (vel/acel aviso y condenatorio), nº lóbulos (BPF), nº dientes (GMF) |
+| `Rodamientos` | Geometría Nb/Bd/Pd/θ → frecuencias de defecto |
+| `UnidadesCompresoras`, `Motores` | Catálogos maestros para poblar `Posiciones` |
+
+**Velocidad por etapa (máquinas engranadas):** en Dry Screw las etapas giran a
+N× la velocidad del motor. Se guarda la **relación de transmisión** por
+posición; ingresas solo la **RPM del motor** y el sistema deriva la RPM real de
+cada sensor — con ella calcula órdenes y frecuencias de defecto correctos.
+
+`Inicializar hojas` siembra datos de **EJEMPLO** (CSD-102 lubricado y DSG-220
+engranado) para mostrar la estructura; reemplázalos por los valores reales de
+Kaeser Colombia. Los límites de aceleración condenatorios se comparan contra el
+**a-RMS (g) del Monitoring** del VES004; el a-RMS estimado del espectro es solo
+un apoyo.
 
 ---
 
@@ -81,10 +108,12 @@ apps-script/
   appsscript.json      Manifiesto (web app, zona horaria)
   Config.gs            Catálogo: montaje, rodamientos, umbrales, constantes
   Frecuencias.gs       Calculadora de frecuencias de defecto
-  Diagnostico.gs       Motor de reglas (Carta de Charlotte)
+  Diagnostico.gs       Motor de reglas (Carta de Charlotte) + límites por posición
+  Frecuencias.gs       Calculadora de frecuencias de defecto
+  BaseDatos.gs         Acceso a la BD: apiListaEquipos / apiEquipo (resuelve por sensor)
   Importar.gs          Importación de 4 CSV (uno por sensor) + reporte consolidado
   Code.gs              Menú Sheets, doGet (web), API HTML, parser CSV, hojas
-  Index.html           Interfaz web (formulario + reporte)
+  Index.html           Interfaz web (selector de equipo + carga + reporte)
 .clasp.json.example    Plantilla clasp (copiar a .clasp.json con tu scriptId)
 ejemplos/              CSV de espectro de ejemplo (incl. medicion_CSD102_S1..S4.csv)
 ```
@@ -146,9 +175,10 @@ El botón *Cargar ejemplo* usa `ejemplos/espectro_desalineacion_CSD102.csv`.
 Flujo estándar de campo: cada medición produce **4 archivos, uno por sensor**
 (S1–S4). En el panel *Importar medición completa*:
 
-1. Elige la **familia** (define qué es S1..S4 y muestra su posición/tipo).
-2. Completa **TAG** y **RPM** (panel 1). Opcional: FL/polos, y **rodamiento por
-   sensor** (motor y airend suelen llevar rodamientos distintos).
+1. Elige el **Equipo** en el selector (base de datos): autocompleta familia,
+   RPM motor, FL/polos y precarga los 4 sensores con su **posición, rodamiento,
+   RPM por etapa y límites**. (Sin equipo, funciona en modo manual por familia.)
+2. Ajusta la **RPM motor** a la real de la toma si hay variador.
 3. Carga los 4 CSV. Cada archivo es un espectro del VES004 con **1ª mitad `mg`
    (aceleración) y 2ª mitad `mm/s` (velocidad)**.
 4. **Corte accel/vel**: *Automático* detecta el reinicio del eje de frecuencia

@@ -17,6 +17,9 @@
 /** Nombres de hojas del libro de trabajo. */
 var HOJAS = {
   EQUIPOS: 'Equipos',
+  POSICIONES: 'Posiciones',          // fuente de verdad por sensor: rodamiento, velocidad, límites
+  UNIDADES: 'UnidadesCompresoras',   // catálogo maestro de airends (para poblar)
+  MOTORES: 'Motores',                // catálogo maestro de motores (para poblar)
   SENSORES: 'Sensores',
   MEDICIONES: 'Mediciones',
   ESPECTROS: 'Espectros',
@@ -123,6 +126,42 @@ var RODAMIENTOS_REF = {
   '6312': { Nb: 8, Bd: 22.2, Pd: 92.5, theta: 0 },
   'NU2216': { Nb: 13, Bd: 18.0, Pd: 108.0, theta: 0 },
   '7310': { Nb: 11, Bd: 16.0, Pd: 80.0, theta: 40 }
+};
+
+/**
+ * Datos de EJEMPLO para sembrar la base de datos (se reemplazan por los reales
+ * de Kaeser Colombia). Los valores de rodamientos, relaciones y límites NO son
+ * de referencia oficial: son marcadores de posición para mostrar la estructura.
+ */
+var SEED = {
+  // Equipos: TAG | Serie | Familia | Airend | Motor | RPM_motor | Variador | FL_Hz | Polos | Arranque | Notas
+  equipos: [
+    ['CSD-102', 'CSD 105', 'LUBRICADO', 'SIGMA-CSD105', 'MOT-45KW-2P', 2970, 'No', 60, 2, 'Estrella-Triángulo', 'EJEMPLO — reemplazar por datos reales'],
+    ['DSG-220', 'DSG 220-2', 'DRY_SCREW', 'AIR-DSG220', 'MOT-160KW-2P', 3560, 'Sí', 60, 2, 'SFC (variador)', 'EJEMPLO — máquina engranada de 2 etapas']
+  ],
+  // Posiciones: TAG | Sensor | Posicion | Unidad | Rodamiento | Relacion_vel | Vel_aviso | Vel_cond | Acel_aviso_g | Acel_cond_g | gSE_aviso | gSE_cond | N_lobulos | N_dientes
+  posiciones: [
+    // CSD lubricado (acople directo, relación 1.0)
+    ['CSD-102', 1, 'Motor lado B (NDE)', 'motor', '6210', 1.0, 2.8, 4.5, 2.0, 4.0, 1.0, 3.0, '', ''],
+    ['CSD-102', 2, 'Motor lado A (acople)', 'motor', '6208', 1.0, 2.8, 4.5, 2.0, 4.0, 1.0, 3.0, '', ''],
+    ['CSD-102', 3, 'Rotor macho admisión', 'airend', 'NU2216', 1.0, 4.5, 7.1, 3.0, 6.0, 1.5, 4.0, 5, ''],
+    ['CSD-102', 4, 'Rotor macho compresión', 'airend', 'NU2216', 1.0, 4.5, 7.1, 3.0, 6.0, 1.5, 4.0, 5, ''],
+    // DSG dry screw (etapas multiplicadas por engranaje)
+    ['DSG-220', 1, 'Etapa 1 (no impulsor)', 'airend', '7310', 3.20, 4.5, 7.1, 4.0, 8.0, 2.0, 5.0, 3, 37],
+    ['DSG-220', 2, 'Etapa 2 (no impulsor)', 'airend', '7310', 5.10, 4.5, 7.1, 4.0, 8.0, 2.0, 5.0, 3, 37],
+    ['DSG-220', 3, 'Gear Box', 'gearbox', '6312', 1.0, 2.8, 4.5, 3.0, 6.0, 1.5, 4.0, '', 37],
+    ['DSG-220', 4, 'Motor lado DE', 'motor', '6312', 1.0, 2.8, 4.5, 2.0, 4.0, 1.0, 3.0, '', '']
+  ],
+  // UnidadesCompresoras: Codigo | Familia | Rod_admision | Rod_compresion | N_lobulos | N_dientes | Relacion_default
+  unidades: [
+    ['SIGMA-CSD105', 'LUBRICADO', 'NU2216', 'NU2216', 5, '', 1.0],
+    ['AIR-DSG220', 'DRY_SCREW', '7310', '7310', 3, 37, 3.20]
+  ],
+  // Motores: Codigo | Rod_DE | Rod_NDE | Polos
+  motores: [
+    ['MOT-45KW-2P', '6208', '6210', 2],
+    ['MOT-160KW-2P', '6312', '6312', 2]
+  ]
 };
 
 /** Convierte grados a radianes. */

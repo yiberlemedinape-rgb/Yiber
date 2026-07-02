@@ -43,7 +43,8 @@ function diagnosticar(medicion) {
     ruido: ruidoDeFondo_(espectro),
     overall: energiaTotal_(espectro),
     espectroAccel: espectroAccel,
-    ruidoAccel: ruidoDeFondo_(espectroAccel)
+    ruidoAccel: ruidoDeFondo_(espectroAccel),
+    limites: limitesEfectivos_(m)   // aviso/condenatorio por posición (o defaults)
   };
 
   var hallazgos = [];
@@ -67,7 +68,7 @@ function diagnosticar(medicion) {
   // Ordenar por confianza descendente.
   hallazgos.sort(function (a, b) { return b.confianza - a.confianza; });
 
-  var semaforo = semaforoGlobal_(m.global, hallazgos);
+  var semaforo = semaforoGlobal_(m.global, hallazgos, ctx.limites);
   var frecuencias = tablaFrecuencias_(ctx);
 
   return {
@@ -78,9 +79,29 @@ function diagnosticar(medicion) {
         (hallazgos[0].subtipo ? ' (' + hallazgos[0].subtipo + ')' : '')
       : ' — Sin patrón espectral concluyente.'),
     hallazgos: hallazgos,
-    frecuencias: frecuencias
+    frecuencias: frecuencias,
+    limites: ctx.limites
   };
 }
+
+/**
+ * Límites efectivos (aviso/condenatorio). Toma los de la posición (medicion.limites)
+ * y cae a los defaults de Config para lo que no esté definido.
+ * Velocidad en mm/s (RMS), aceleración en g (RMS), gSE en su unidad IFM.
+ */
+function limitesEfectivos_(m) {
+  var L = (m && m.limites) || {};
+  return {
+    velAviso: numPos_(L.velAviso, UMBRALES_VELOCIDAD_RMS.aceptableMax),
+    velCond: numPos_(L.velCond, UMBRALES_VELOCIDAD_RMS.alarmaMax),
+    acelAviso: numPos_(L.acelAviso, null),
+    acelCond: numPos_(L.acelCond, null),
+    gseAviso: numPos_(L.gseAviso, UMBRALES_GSE.aceptableMax),
+    gseCond: numPos_(L.gseCond, UMBRALES_GSE.alarmaMax)
+  };
+}
+
+function numPos_(v, def) { v = Number(v); return (isFinite(v) && v > 0) ? v : def; }
 
 /* ======================= UTILIDADES DE ESPECTRO ======================= */
 
@@ -154,7 +175,7 @@ function reglaDesequilibrio_(ctx) {
     tipo: 'Desequilibrio',
     subtipo: '',
     confianza: conf,
-    severidad: severidadPorOrden_(a1),
+    severidad: severidadPorOrden_(a1, ctx.limites),
     evidencia: [
       '1X dominante (' + redondear_(a1, 3) + ') vs 2X (' + redondear_(a2, 3) + '), 3X (' + redondear_(a3, 3) + ')',
       'Predominio ' + (ctx.dir || 'radial') + '.'
@@ -194,7 +215,7 @@ function reglaDesalineacion_(ctx) {
     tipo: 'Desalineación',
     subtipo: subtipo,
     confianza: acotar_(conf),
-    severidad: severidadPorOrden_(a2),
+    severidad: severidadPorOrden_(a2, ctx.limites),
     evidencia: [evid],
     accion: 'Verificar desfase de 180° a través del acople (axial=angular, radial=paralela). ' +
             'Alinear en frío considerando crecimiento térmico; revisar pie blando antes de alinear.'
@@ -321,7 +342,7 @@ function reglaEngranajes_(ctx) {
     tipo: 'Engranaje',
     subtipo: conBandas ? 'GMF con bandas laterales ±1X' : 'GMF elevada',
     confianza: acotar_(conBandas ? 72 : 60),
-    severidad: severidadPorOrden_(aG),
+    severidad: severidadPorOrden_(aG, ctx.limites),
     evidencia: ['GMF@' + gmf + 'Hz (amp=' + redondear_(aG, 3) + ')' + (conBandas ? ' con bandas ±1X.' : '.')],
     accion: 'Inspeccionar desgaste/diente agrietado. Bandas laterales a 1X del eje ' +
             'afectado localizan el engrane con problema. Revisar backlash y alineación.'
@@ -344,7 +365,7 @@ function reglaHidraulica_(ctx) {
         tipo: 'Fuerza hidráulica',
         subtipo: 'BPF (paso de álabes)',
         confianza: 65,
-        severidad: severidadPorOrden_(aB),
+        severidad: severidadPorOrden_(aB, ctx.limites),
         evidencia: ['BPF@' + bpf + 'Hz (amp=' + redondear_(aB, 3) + ') = ' + ctx.m.alabes.n + '·fr.'],
         accion: 'Revisar holgura impulsor-voluta, recirculación y condiciones de operación.'
       };
@@ -440,9 +461,10 @@ function reglaMotorElectrico_(ctx) {
 
 /* ======================== SEVERIDAD / SEMÁFORO ======================== */
 
-function severidadPorOrden_(amp) {
-  if (amp >= UMBRALES_VELOCIDAD_RMS.alarmaMax) return 'ALTA';
-  if (amp >= UMBRALES_VELOCIDAD_RMS.aceptableMax) return 'MEDIA';
+function severidadPorOrden_(amp, L) {
+  L = L || limitesEfectivos_({});
+  if (amp >= L.velCond) return 'ALTA';
+  if (amp >= L.velAviso) return 'MEDIA';
   return 'BAJA';
 }
 
@@ -450,32 +472,47 @@ function severidadPorRuido_(ctx) {
   return ctx.ruido > 0 && ctx.overall > 20 * ctx.ruido ? 'MEDIA' : 'BAJA';
 }
 
-/** Semáforo global priorizando valores globales medidos (Monitoring). */
-function semaforoGlobal_(global, hallazgos) {
-  var color = 'VERDE', texto = 'Estado general: NORMAL';
+/** Ranking de colores para quedarnos con el peor. */
+function peorColor_(a, b) {
+  var r = { VERDE: 0, AMARILLO: 1, ROJO: 2 };
+  return (r[b] > r[a]) ? b : a;
+}
+
+/**
+ * Semáforo global contra los límites de la posición: aviso (amarillo) y
+ * condenatorio (rojo), en velocidad (mm/s), aceleración (g RMS) y gSE.
+ */
+function semaforoGlobal_(global, hallazgos, L) {
+  L = L || limitesEfectivos_({});
   var g = global || {};
+  var color = 'VERDE', motivos = [];
 
-  var v = Number(g.vRMS);
-  if (isFinite(v)) {
-    if (v >= UMBRALES_VELOCIDAD_RMS.alarmaMax) { color = 'ROJO'; texto = 'Estado general: INACEPTABLE (v-RMS ' + v + ' mm/s)'; }
-    else if (v >= UMBRALES_VELOCIDAD_RMS.aceptableMax) { color = 'AMARILLO'; texto = 'Estado general: VIGILAR (v-RMS ' + v + ' mm/s)'; }
-    else if (v >= UMBRALES_VELOCIDAD_RMS.buenoMax) { color = 'AMARILLO'; texto = 'Estado general: ACEPTABLE-ALTO (v-RMS ' + v + ' mm/s)'; }
-    else { texto = 'Estado general: BUENO (v-RMS ' + v + ' mm/s)'; }
+  function evaluar(valor, aviso, cond, etiqueta, unidad) {
+    if (!isFinite(valor)) return;
+    if (cond && valor >= cond) {
+      color = peorColor_(color, 'ROJO');
+      motivos.push(etiqueta + ' ' + redondear_(valor, 2) + unidad + ' ≥ condenatorio ' + cond);
+    } else if (aviso && valor >= aviso) {
+      color = peorColor_(color, 'AMARILLO');
+      motivos.push(etiqueta + ' ' + redondear_(valor, 2) + unidad + ' ≥ aviso ' + aviso);
+    }
   }
 
-  var gse = Number(g.gSE);
-  if (isFinite(gse) && gse >= UMBRALES_GSE.alarmaMax && color !== 'ROJO') {
-    color = 'ROJO'; texto = 'Estado general: INACEPTABLE (gSE ' + gse + ' — rodamiento)';
-  }
+  evaluar(Number(g.vRMS), L.velAviso, L.velCond, 'v-RMS', ' mm/s');
+  evaluar(Number(g.aRMS), L.acelAviso, L.acelCond, 'a-RMS', ' g');
+  evaluar(Number(g.gSE), L.gseAviso, L.gseCond, 'gSE', '');
 
-  // Un hallazgo de rodamiento Etapa 3+ fuerza rojo.
+  // Un rodamiento en Etapa 3+ es condenatorio aunque el global no dispare.
   hallazgos.forEach(function (h) {
-    if (h.tipo === 'Rodamiento' && /3|4/.test(h.subtipo) && color !== 'ROJO') {
-      color = 'ROJO'; texto = 'Estado general: INACEPTABLE (rodamiento ' + h.subtipo + ')';
+    if (h.tipo === 'Rodamiento' && /3|4/.test(h.subtipo)) {
+      color = peorColor_(color, 'ROJO');
+      motivos.push('rodamiento ' + h.subtipo);
     }
   });
 
-  return { color: color, texto: texto };
+  var estado = color === 'ROJO' ? 'INACEPTABLE / CONDENATORIO'
+    : color === 'AMARILLO' ? 'VIGILAR (nivel de aviso)' : 'NORMAL';
+  return { color: color, texto: 'Estado general: ' + estado + (motivos.length ? ' — ' + motivos.join('; ') : '') };
 }
 
 /** Tabla de referencia de frecuencias para el reporte. */

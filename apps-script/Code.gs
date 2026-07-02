@@ -114,11 +114,14 @@ function aNumero_(s) {
 
 /* ========================= HOJAS DE CÁLCULO ========================= */
 
-/** Crea las hojas base con encabezados. Idempotente. */
+/** Crea las hojas base con encabezados y datos de ejemplo. Idempotente. */
 function inicializarHojas() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var defs = {};
-  defs[HOJAS.EQUIPOS] = ['TAG', 'Serie', 'Modelo', 'RPM_max', 'FL_Hz', 'Polos', 'Rodamiento_ref', 'Dientes_engrane', 'N_alabes', 'Notas'];
+  defs[HOJAS.EQUIPOS] = ['TAG', 'Serie', 'Familia', 'Airend', 'Motor', 'RPM_motor', 'Variador', 'FL_Hz', 'Polos', 'Arranque', 'Notas'];
+  defs[HOJAS.POSICIONES] = ['TAG', 'Sensor', 'Posicion', 'Unidad', 'Rodamiento', 'Relacion_vel', 'Vel_aviso_mm_s', 'Vel_cond_mm_s', 'Acel_aviso_g', 'Acel_cond_g', 'gSE_aviso', 'gSE_cond', 'N_lobulos', 'N_dientes'];
+  defs[HOJAS.UNIDADES] = ['Codigo', 'Familia', 'Rod_admision', 'Rod_compresion', 'N_lobulos', 'N_dientes', 'Relacion_default'];
+  defs[HOJAS.MOTORES] = ['Codigo', 'Rod_DE', 'Rod_NDE', 'Polos'];
   defs[HOJAS.SENSORES] = ['Familia', 'Sensor', 'Posicion', 'Tipo'];
   defs[HOJAS.MEDICIONES] = ['Fecha', 'TAG', 'Sensor', 'RPM', 'vRMS_mm_s', 'aRMS_g', 'HFD_g', 'gSE', 'Direccion', 'Rodamiento'];
   defs[HOJAS.ESPECTROS] = ['Fecha', 'TAG', 'Sensor', 'Frecuencia_Hz', 'Amplitud', 'Unidad'];
@@ -134,39 +137,41 @@ function inicializarHojas() {
     }
   });
 
-  // Poblar Sensores desde el catálogo si está vacía.
-  var shS = ss.getSheetByName(HOJAS.SENSORES);
-  if (shS.getLastRow() <= 1) {
-    var filas = [];
-    Object.keys(MONTAJE_SENSORES).forEach(function (fam) {
-      MONTAJE_SENSORES[fam].sensores.forEach(function (s) {
-        filas.push([MONTAJE_SENSORES[fam].etiqueta, s.n, s.pos, s.tipo]);
-      });
+  sembrarHoja_(ss, HOJAS.EQUIPOS, SEED.equipos);
+  sembrarHoja_(ss, HOJAS.POSICIONES, SEED.posiciones);
+  sembrarHoja_(ss, HOJAS.UNIDADES, SEED.unidades);
+  sembrarHoja_(ss, HOJAS.MOTORES, SEED.motores);
+
+  // Poblar Sensores (mapa de montaje por familia).
+  var filasS = [];
+  Object.keys(MONTAJE_SENSORES).forEach(function (fam) {
+    MONTAJE_SENSORES[fam].sensores.forEach(function (s) {
+      filasS.push([fam, s.n, s.pos, s.tipo]);
     });
-    if (filas.length) shS.getRange(2, 1, filas.length, 4).setValues(filas);
-  }
+  });
+  sembrarHoja_(ss, HOJAS.SENSORES, filasS);
 
-  // Poblar Umbrales por defecto.
-  var shU = ss.getSheetByName(HOJAS.UMBRALES);
-  if (shU.getLastRow() <= 1) {
-    shU.getRange(2, 1, 3, 4).setValues([
-      ['vRMS_mm_s', UMBRALES_VELOCIDAD_RMS.buenoMax, UMBRALES_VELOCIDAD_RMS.aceptableMax, UMBRALES_VELOCIDAD_RMS.alarmaMax],
-      ['gSE', UMBRALES_GSE.buenoMax, UMBRALES_GSE.aceptableMax, UMBRALES_GSE.alarmaMax],
-      ['HFD_g', UMBRALES_HFD.buenoMax, UMBRALES_HFD.aceptableMax, UMBRALES_HFD.alarmaMax]
-    ]);
-  }
+  sembrarHoja_(ss, HOJAS.UMBRALES, [
+    ['vRMS_mm_s', UMBRALES_VELOCIDAD_RMS.buenoMax, UMBRALES_VELOCIDAD_RMS.aceptableMax, UMBRALES_VELOCIDAD_RMS.alarmaMax],
+    ['gSE', UMBRALES_GSE.buenoMax, UMBRALES_GSE.aceptableMax, UMBRALES_GSE.alarmaMax],
+    ['HFD_g', UMBRALES_HFD.buenoMax, UMBRALES_HFD.aceptableMax, UMBRALES_HFD.alarmaMax]
+  ]);
 
-  // Poblar Rodamientos de referencia.
-  var shR = ss.getSheetByName(HOJAS.RODAMIENTOS);
-  if (shR.getLastRow() <= 1) {
-    var fr = Object.keys(RODAMIENTOS_REF).map(function (k) {
-      var g = RODAMIENTOS_REF[k];
-      return [k, g.Nb, g.Bd, g.Pd, g.theta];
-    });
-    shR.getRange(2, 1, fr.length, 5).setValues(fr);
-  }
+  sembrarHoja_(ss, HOJAS.RODAMIENTOS, Object.keys(RODAMIENTOS_REF).map(function (k) {
+    var g = RODAMIENTOS_REF[k];
+    return [k, g.Nb, g.Bd, g.Pd, g.theta];
+  }));
 
-  SpreadsheetApp.getUi().alert('Hojas inicializadas correctamente.');
+  SpreadsheetApp.getUi().alert('Hojas inicializadas con datos de EJEMPLO.\n\n' +
+    'Reemplaza en Equipos/Posiciones/Rodamientos los valores reales de Kaeser Colombia.');
+}
+
+/** Escribe filas de ejemplo en una hoja solo si está vacía (idempotente). */
+function sembrarHoja_(ss, nombre, filas) {
+  if (!filas || !filas.length) return;
+  var sh = ss.getSheetByName(nombre);
+  if (sh.getLastRow() > 1) return; // ya tiene datos: no sobreescribir
+  sh.getRange(2, 1, filas.length, filas[0].length).setValues(filas);
 }
 
 /** Registra el diagnóstico en la hoja "Diagnostico". */
