@@ -344,6 +344,10 @@
       });
       if (f.rodamiento) Object.keys(f.rodamiento).forEach(function (k) {
         html += '<tr><td>' + k + '</td><td>' + f.rodamiento[k] + '</td></tr>'; });
+      if (f.rodamientos) Object.keys(f.rodamientos).forEach(function (ref) {
+        Object.keys(f.rodamientos[ref]).forEach(function (k) {
+          html += '<tr><td>' + ref + ' ' + k + '</td><td>' + f.rodamientos[ref][k] + '</td></tr>'; });
+      });
       if (f.electricas) { html += '<tr><td>2·FL</td><td>' + f.electricas.dosFL + '</td></tr>' +
         '<tr><td>Pole-pass</td><td>' + f.electricas.polePass + '</td></tr>'; }
       if (f.GMF) html += '<tr><td>GMF</td><td>' + f.GMF + '</td></tr>';

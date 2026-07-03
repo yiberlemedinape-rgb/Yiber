@@ -32,15 +32,24 @@ function apiListaEquipos() {
     });
 }
 
-/** Mapa referencia → geometría, combinando la hoja Rodamientos y el catálogo. */
+/** Mapa referencia → definición, combinando la hoja Rodamientos y el catálogo.
+ *  Prefiere los coeficientes del fabricante (órdenes/rev) si están presentes. */
 function mapaRodamientos_() {
   var mapa = {};
   Object.keys(RODAMIENTOS_REF).forEach(function (k) { mapa[k] = RODAMIENTOS_REF[k]; });
   leerTabla_(HOJAS.RODAMIENTOS).forEach(function (r) {
     if (!r.Referencia) return;
-    mapa[String(r.Referencia)] = {
-      Nb: Number(r.Nb), Bd: Number(r.Bd_mm), Pd: Number(r.Pd_mm), theta: Number(r.Theta_grados) || 0
-    };
+    var coefI = Number(r.BPFI_orden), coefO = Number(r.BPFO_orden);
+    if ((isFinite(coefI) && coefI > 0) || (isFinite(coefO) && coefO > 0)) {
+      mapa[String(r.Referencia)] = {
+        coefBPFI: coefI || 0, coefBPFO: coefO || 0,
+        coefBSF: Number(r.BSF_orden) || 0, Nb: Number(r.Nb) || 0
+      };
+    } else {
+      mapa[String(r.Referencia)] = {
+        Nb: Number(r.Nb), Bd: Number(r.Bd_mm), Pd: Number(r.Pd_mm), theta: Number(r.Theta_grados) || 0
+      };
+    }
   });
   return mapa;
 }
@@ -64,12 +73,16 @@ function apiEquipo(tag) {
     .map(function (p) {
       var relacion = Number(p.Relacion_vel) || 1;
       var ref = String(p.Rodamiento || '');
+      // Varias referencias por posición, separadas por coma ("NU206E,NA4904").
+      var lista = ref.split(',').map(function (x) { return x.trim(); }).filter(String)
+        .map(function (x) { return { ref: x, geo: rods[x] || null }; });
       return {
         sensor: Number(p.Sensor),
         posicion: String(p.Posicion || ''),
         unidad: String(p.Unidad || ''),
         rodamiento: ref,
-        geometria: rods[ref] || null,
+        rodamientos: lista,           // [{ref, geo}] resueltos contra la hoja
+        geometria: lista.length === 1 ? lista[0].geo : null,
         relacion: relacion,
         rpm: redondear_(rpmMotor * relacion, 1),
         nLobulos: Number(p.N_lobulos) || null,

@@ -86,7 +86,11 @@ function apiImportarSensores(payload) {
     var relacion = pos ? (pos.relacion || 1) : 1;
     var rpm = numOr_(s.rpm, motorRpmEfectivo ? motorRpmEfectivo * relacion : null, p.rpm);
 
-    var rodamiento = s.rodamiento || (pos && pos.rodamiento) || p.rodamiento || undefined;
+    // Rodamiento(s): override manual > lista resuelta de la BD > payload global.
+    // pos.rodamientos ya viene resuelto contra la hoja Rodamientos ([{ref,geo}]),
+    // así el motor reconoce referencias que solo existen en la hoja.
+    var rodamiento = s.rodamiento || (pos && (pos.rodamientos && pos.rodamientos.length ? pos.rodamientos : pos.rodamiento)) || p.rodamiento || undefined;
+    var rodTexto = s.rodamiento || (pos && pos.rodamiento) || p.rodamiento || '';
     var limites = s.limites || (pos && pos.limites) || p.limites || {};
     var FL = numOr_(p.FL, equipo.FL, null);
     var polos = numOr_(p.polos, equipo.polos, null);
@@ -126,7 +130,7 @@ function apiImportarSensores(payload) {
             vRMS == null ? '' : redondear_(vRMS, 3),
             aRMS == null ? '' : redondear_(aRMS, 4),
             HFD == null ? '' : HFD, gSE == null ? '' : gSE,
-            s.direccion || '', rodamiento || '']);
+            s.direccion || '', rodTexto]);
         } catch (e) {}
       }
     }
@@ -135,7 +139,7 @@ function apiImportarSensores(payload) {
 
     return {
       sensor: nombre, n: s.n, pos: posTxt, tipo: s.tipo,
-      rpm: rpm, rodamiento: rodamiento,
+      rpm: rpm, rodamiento: rodTexto,
       nAccel: partes.accel.length, nVel: partes.vel.length,
       fuenteGlobal: hayMon ? 'Monitoring (real)' : 'estimado del espectro',
       rpmReal: isFinite(mon.rpm) ? mon.rpm : null,

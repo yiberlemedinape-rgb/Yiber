@@ -84,19 +84,37 @@ medición**, no del equipo en bloque. La BD está normalizada en hojas:
 | Hoja | Rol |
 |---|---|
 | `Equipos` | TAG → familia, airend, motor, RPM motor, variador, FL, polos, arranque |
-| `Posiciones` | **Fuente de verdad por sensor**: rodamiento, relación de transmisión, límites (vel/acel aviso y condenatorio), nº lóbulos (BPF), nº dientes (GMF) |
-| `Rodamientos` | Geometría Nb/Bd/Pd/θ → frecuencias de defecto |
+| `Posiciones` | **Fuente de verdad por sensor**: rodamiento(s), relación de transmisión, límites (vel/acel aviso y condenatorio), nº lóbulos (BPF), nº dientes (GMF) |
+| `Rodamientos` | Por **coeficientes del fabricante** (BPFI/BPFO/BSF en órdenes/rev + nº elementos) **o** por geometría Nb/Bd/Pd/θ → frecuencias de defecto |
 | `UnidadesCompresoras`, `Motores` | Catálogos maestros para poblar `Posiciones` |
 
-**Velocidad por etapa (máquinas engranadas):** en Dry Screw las etapas giran a
-N× la velocidad del motor. Se guarda la **relación de transmisión** por
-posición; ingresas solo la **RPM del motor** y el sistema deriva la RPM real de
-cada sensor — con ella calcula órdenes y frecuencias de defecto correctos.
+**Velocidad por etapa (máquinas engranadas o por correa):** las etapas giran a
+N× la velocidad del motor (multiplicadora en Dry Screw, poleas en SK). Se
+guarda la **relación de transmisión** por posición; ingresas solo la **RPM del
+motor** y el sistema deriva la RPM real de cada sensor — con ella calcula
+órdenes y frecuencias de defecto correctos.
 
-`Inicializar hojas` siembra datos de **EJEMPLO** (CSD-102 lubricado y DSG-220
-engranado) para mostrar la estructura; reemplázalos por los valores reales de
-Kaeser Colombia. Los límites de aceleración condenatorios se comparan contra el
-**a-RMS (g) del Monitoring** del VES004 (ver §5.2); el a-RMS estimado del
+### Cómo migrar una tabla de frecuencias tipo Excel (ej. SK20 Sigma 10)
+
+| Dato del Excel | Dónde va |
+|---|---|
+| Bearing + BPFI/BPFO/BSF (órdenes) + #ElemRod | Hoja `Rodamientos`, columnas `BPFI_orden`, `BPFO_orden`, `BSF_orden`, `Nb` |
+| Frecuencias de falla en Hz | **No se guardan** — el script las calcula (orden × fr de la posición) |
+| Diámetros de polea (142/123 mm) | `Posiciones.Relacion_vel` = 142/123 = 1.1545 |
+| RPM motor (3565) | `Equipos.RPM_motor` |
+| Varios rodamientos en una posición (macho + hembra) | `Posiciones.Rodamiento` = lista separada por comas: `NU206E,NA4904` |
+| "Pasos de presión" (343 Hz = 5 × 68.6) | `Posiciones.N_lobulos` = 5 (es el BPF del tornillo) |
+
+> ⚠️ **Cuidado clásico**: en tablas Excel es fácil calcular las frecuencias de
+> falla del airend con la velocidad del MOTOR. Si el tornillo gira a 68.6 Hz,
+> el BPFI del NU206E es 7.756 × 68.6 = **532 Hz**, no 7.756 × 59.4 = 461 Hz.
+> Aquí eso no puede pasar: cada posición usa su propia velocidad derivada.
+
+`Inicializar hojas` siembra datos de **EJEMPLO** (CSD-102 lubricado, DSG-220
+engranado y **SK20-01 por correa con los coeficientes reales de la tabla
+SK20 Sigma 10**); reemplaza límites y demás marcadores por los valores reales
+de Kaeser Colombia. Los límites de aceleración condenatorios se comparan contra
+el **a-RMS (g) del Monitoring** del VES004 (ver §5.2); el a-RMS estimado del
 espectro es solo un apoyo cuando no se carga el Monitoring.
 
 ---
@@ -109,7 +127,6 @@ apps-script/
   Config.gs            Catálogo: montaje, rodamientos, umbrales, constantes
   Frecuencias.gs       Calculadora de frecuencias de defecto
   Diagnostico.gs       Motor de reglas (Carta de Charlotte) + límites por posición
-  Frecuencias.gs       Calculadora de frecuencias de defecto
   BaseDatos.gs         Acceso a la BD: apiListaEquipos / apiEquipo (resuelve por sensor)
   Monitoring.gs        Parser del CSV de Monitoring (v/a-RMS, gSE, HFD, rpm reales)
   Importar.gs          Importación de 4 CSV (uno por sensor) + reporte consolidado

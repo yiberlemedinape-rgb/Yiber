@@ -258,26 +258,29 @@ function reglaHolguras_(ctx) {
  */
 function reglaRodamientos_(ctx) {
   var g = (ctx.m.global) || {};
-  var geo = resolverRodamiento_(ctx.m.rodamiento);
-  var frec = geo ? frecuenciasRodamiento(geo, ctx.fr) : null;
+  var lista = resolverRodamientos_(ctx.m.rodamiento);   // [{ref, geo}]
 
   // Evidencia por energía de pico.
   var gSE = Number(g.gSE) || 0, HFD = Number(g.HFD) || 0;
   var energiaAlta = gSE > UMBRALES_GSE.aceptableMax || HFD > UMBRALES_HFD.aceptableMax;
 
-  // Evidencia espectral: frecuencias de defecto en cada mitad del espectro.
-  // Aparecen PRIMERO en aceleración (mg) — defecto incipiente — y luego migran
-  // al espectro de velocidad (mm/s) al agravarse (Carta de Charlotte).
+  // Evidencia espectral: frecuencias de defecto de CADA rodamiento de la
+  // posición, en cada mitad del espectro. Aparecen PRIMERO en aceleración (mg)
+  // — defecto incipiente — y luego migran al espectro de velocidad (mm/s) al
+  // agravarse (Carta de Charlotte).
   var defVel = [];    // en velocidad → daño avanzado
   var defAccel = [];  // solo en aceleración → incipiente
-  if (frec) {
+  lista.forEach(function (rod) {
+    if (!rod.geo || !ctx.fr) return;
+    var frec = frecuenciasRodamiento(rod.geo, ctx.fr);
+    var tag = lista.length > 1 ? rod.ref + ' ' : '';
     ['BPFO', 'BPFI', 'BSF', 'FTF'].forEach(function (k) {
       var aV = ctx.espectro.length ? picoCerca_(ctx.espectro, frec[k], ctx.fr) : 0;
       var aA = ctx.espectroAccel.length ? picoCerca_(ctx.espectroAccel, frec[k], ctx.fr) : 0;
-      if (aV > 3 * ctx.ruido) defVel.push(k + '@' + frec[k] + 'Hz vel(' + redondear_(aV, 3) + ')');
-      else if (aA > 3 * ctx.ruidoAccel) defAccel.push(k + '@' + frec[k] + 'Hz acc(' + redondear_(aA, 3) + ')');
+      if (aV > 3 * ctx.ruido) defVel.push(tag + k + '@' + frec[k] + 'Hz vel(' + redondear_(aV, 3) + ')');
+      else if (aA > 3 * ctx.ruidoAccel) defAccel.push(tag + k + '@' + frec[k] + 'Hz acc(' + redondear_(aA, 3) + ')');
     });
-  }
+  });
   var defectos = defVel.concat(defAccel);
 
   if (!energiaAlta && !defectos.length) return null;
@@ -315,7 +318,7 @@ function reglaRodamientos_(ctx) {
   if (HFD) evid.push('HFD=' + HFD + ' g (alarma>' + UMBRALES_HFD.alarmaMax + ')');
   if (defVel.length) evid.push('Defectos en velocidad: ' + defVel.join(', '));
   if (defAccel.length) evid.push('Defectos en aceleración: ' + defAccel.join(', '));
-  if (!geo) evid.push('Sin geometría de rodamiento: solo se evalúa energía de pico.');
+  if (!lista.length) evid.push('Sin datos de rodamiento: solo se evalúa energía de pico.');
 
   return {
     tipo: 'Rodamiento',
@@ -519,8 +522,17 @@ function semaforoGlobal_(global, hallazgos, L) {
 function tablaFrecuencias_(ctx) {
   var out = { fr: redondear_(ctx.fr, 3) };
   for (var n of [0.5, 1, 1.5, 2, 3]) out['x' + n] = redondear_(n * ctx.fr, 3);
-  var geo = resolverRodamiento_(ctx.m.rodamiento);
-  if (geo && ctx.fr) out.rodamiento = frecuenciasRodamiento(geo, ctx.fr);
+  var lista = resolverRodamientos_(ctx.m.rodamiento);
+  if (lista.length && ctx.fr) {
+    if (lista.length === 1) {
+      out.rodamiento = frecuenciasRodamiento(lista[0].geo, ctx.fr);
+    } else {
+      out.rodamientos = {};
+      lista.forEach(function (rod) {
+        if (rod.geo) out.rodamientos[rod.ref] = frecuenciasRodamiento(rod.geo, ctx.fr);
+      });
+    }
+  }
   if (ctx.m.FL && ctx.m.polos && ctx.fr) out.electricas = frecuenciasElectricas(ctx.m.FL, ctx.m.polos, ctx.fr);
   if (ctx.m.engranaje && ctx.m.engranaje.dientes) out.GMF = frecuenciaEngrane(ctx.m.engranaje.dientes, ctx.fr);
   if (ctx.m.alabes && ctx.m.alabes.n) out.BPF = frecuenciaPasoAlabes(ctx.m.alabes.n, ctx.fr);
@@ -529,10 +541,24 @@ function tablaFrecuencias_(ctx) {
 
 /* ============================ AUXILIARES ============================= */
 
-function resolverRodamiento_(r) {
-  if (!r) return null;
-  if (typeof r === 'object') return r;                 // geo directa
-  return RODAMIENTOS_REF[String(r).toUpperCase()] || RODAMIENTOS_REF[String(r)] || null;
+/**
+ * Resuelve la definición de rodamiento(s) a una lista [{ref, geo}].
+ * Acepta: array [{ref,geo}] ya resuelto (BD), objeto geo directo, referencia
+ * simple ('6208') o lista separada por comas ('NU206E,NA4904').
+ * Las referencias con geo nulo se conservan (energía de pico sigue aplicando).
+ */
+function resolverRodamientos_(r) {
+  if (!r) return [];
+  if (Array.isArray(r)) {
+    return r.filter(function (x) { return x && (x.geo || x.ref); });
+  }
+  if (typeof r === 'object') return [{ ref: '(geo)', geo: r }];
+  return String(r).split(',')
+    .map(function (x) { return x.trim(); })
+    .filter(String)
+    .map(function (x) {
+      return { ref: x, geo: RODAMIENTOS_REF[x.toUpperCase()] || RODAMIENTOS_REF[x] || null };
+    });
 }
 
 function acotar_(x) { return Math.max(0, Math.min(100, Math.round(x))); }

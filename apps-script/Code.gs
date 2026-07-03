@@ -127,7 +127,7 @@ function inicializarHojas() {
   defs[HOJAS.ESPECTROS] = ['Fecha', 'TAG', 'Sensor', 'Frecuencia_Hz', 'Amplitud', 'Unidad'];
   defs[HOJAS.DIAGNOSTICO] = ['Fecha', 'TAG', 'Sensor', 'RPM', 'Semaforo', 'Causa_probable', 'Confianza', 'Resumen', 'Acciones'];
   defs[HOJAS.UMBRALES] = ['Parametro', 'Bueno', 'Aceptable', 'Alarma'];
-  defs[HOJAS.RODAMIENTOS] = ['Referencia', 'Nb', 'Bd_mm', 'Pd_mm', 'Theta_grados'];
+  defs[HOJAS.RODAMIENTOS] = ['Referencia', 'Nb', 'Bd_mm', 'Pd_mm', 'Theta_grados', 'BPFI_orden', 'BPFO_orden', 'BSF_orden'];
 
   Object.keys(defs).forEach(function (nombre) {
     var sh = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
@@ -159,7 +159,8 @@ function inicializarHojas() {
 
   sembrarHoja_(ss, HOJAS.RODAMIENTOS, Object.keys(RODAMIENTOS_REF).map(function (k) {
     var g = RODAMIENTOS_REF[k];
-    return [k, g.Nb, g.Bd, g.Pd, g.theta];
+    return [k, g.Nb || '', g.Bd || '', g.Pd || '', (g.theta === undefined ? '' : g.theta),
+            g.coefBPFI || '', g.coefBPFO || '', g.coefBSF || ''];
   }));
 
   SpreadsheetApp.getUi().alert('Hojas inicializadas con datos de EJEMPLO.\n\n' +

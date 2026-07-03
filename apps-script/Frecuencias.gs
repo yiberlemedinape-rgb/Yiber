@@ -14,24 +14,41 @@ function frDesdeRPM_(rpm) {
 }
 
 /**
- * Frecuencias de defecto de rodamiento a partir de la geometría.
- * Fórmulas estándar (ángulo de contacto theta en grados):
- *   FTF  = (fr/2)·(1 − (Bd/Pd)·cosθ)
- *   BPFO = (Nb/2)·fr·(1 − (Bd/Pd)·cosθ)
- *   BPFI = (Nb/2)·fr·(1 + (Bd/Pd)·cosθ)
- *   BSF  = (Pd/(2·Bd))·fr·(1 − ((Bd/Pd)·cosθ)²)
- *   BDF (Ball Defect Freq) = 2·BSF  (un defecto en el elemento golpea 2 pistas)
+ * Frecuencias de defecto de rodamiento. Acepta DOS formas de definición:
  *
- * @param {{Nb:number,Bd:number,Pd:number,theta:number}} geo
+ * (a) COEFICIENTES del fabricante (órdenes por revolución) — el formato de las
+ *     tablas de análisis predictivo de campo (Excel SK20, catálogos SKF/FAG):
+ *       { coefBPFI: 7.756, coefBPFO: 5.242, coefBSF: 2.487, Nb: 13 }
+ *     Entonces: BPFI = coefBPFI·fr, etc.  FTF ≈ (coefBPFO/Nb)·fr
+ *     (la jaula da una vuelta por cada Nb pasos de elemento por la pista externa).
+ *
+ * (b) GEOMETRÍA (ángulo de contacto theta en grados):
+ *       FTF  = (fr/2)·(1 − (Bd/Pd)·cosθ)
+ *       BPFO = (Nb/2)·fr·(1 − (Bd/Pd)·cosθ)
+ *       BPFI = (Nb/2)·fr·(1 + (Bd/Pd)·cosθ)
+ *       BSF  = (Pd/(2·Bd))·fr·(1 − ((Bd/Pd)·cosθ)²)
+ *
+ * BDF (Ball Defect Freq) = 2·BSF (un defecto del elemento golpea ambas pistas).
+ *
+ * @param {Object} geo geometría o coeficientes
  * @param {number} fr Frecuencia de giro (Hz)
  * @return {{FTF:number,BPFO:number,BPFI:number,BSF:number,BDF:number}}
  */
 function frecuenciasRodamiento(geo, fr) {
-  var ratio = (geo.Bd / geo.Pd) * Math.cos(gradosARad_(geo.theta || 0));
-  var FTF = (fr / 2) * (1 - ratio);
-  var BPFO = (geo.Nb / 2) * fr * (1 - ratio);
-  var BPFI = (geo.Nb / 2) * fr * (1 + ratio);
-  var BSF = (geo.Pd / (2 * geo.Bd)) * fr * (1 - ratio * ratio);
+  var FTF, BPFO, BPFI, BSF;
+  if (geo.coefBPFO || geo.coefBPFI) {
+    BPFO = (geo.coefBPFO || 0) * fr;
+    BPFI = (geo.coefBPFI || 0) * fr;
+    BSF = (geo.coefBSF || 0) * fr;
+    FTF = geo.coefFTF ? geo.coefFTF * fr
+        : (geo.Nb && geo.coefBPFO ? (geo.coefBPFO / geo.Nb) * fr : 0);
+  } else {
+    var ratio = (geo.Bd / geo.Pd) * Math.cos(gradosARad_(geo.theta || 0));
+    FTF = (fr / 2) * (1 - ratio);
+    BPFO = (geo.Nb / 2) * fr * (1 - ratio);
+    BPFI = (geo.Nb / 2) * fr * (1 + ratio);
+    BSF = (geo.Pd / (2 * geo.Bd)) * fr * (1 - ratio * ratio);
+  }
   return {
     FTF: redondear_(FTF, 2),
     BPFO: redondear_(BPFO, 2),

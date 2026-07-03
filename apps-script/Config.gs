@@ -114,14 +114,26 @@ var UMBRALES_HFD = {
 };
 
 /**
- * Geometría de rodamientos de referencia para el cálculo de frecuencias de
- * defecto. Se pueden añadir más en la hoja "Rodamientos".
- * Nb=nº elementos, Bd=diámetro elemento, Pd=diámetro primitivo (paso),
- * theta=ángulo de contacto (grados). Coeficientes BPFO/BPFI/BSF/FTF por
- * revolución precalculados a partir de la geometría.
+ * Rodamientos de referencia para el cálculo de frecuencias de defecto.
+ * Dos formas de definición (ver frecuenciasRodamiento):
+ *  - Coeficientes del fabricante (órdenes/rev): coefBPFI, coefBPFO, coefBSF, Nb.
+ *    Es el formato de las tablas de análisis predictivo de campo (Excel SK20).
+ *  - Geometría: Nb, Bd (mm), Pd (mm), theta (°).
+ * Se pueden añadir/sobrescribir en la hoja "Rodamientos".
+ *
+ * Los coeficientes NU206E…6308 provienen de la tabla "Frecuencias SK20
+ * Sigma 10 star delta" (Kaeser Colombia).
  */
 var RODAMIENTOS_REF = {
-  '6208': { Nb: 9, Bd: 12.0, Pd: 60.0, theta: 0 },
+  // — Coeficientes de la tabla SK20 Sigma 10 —
+  'NU206E': { coefBPFI: 7.756, coefBPFO: 5.242, coefBSF: 2.487, Nb: 13 },
+  'NA4904': { coefBPFI: 8.535, coefBPFO: 6.466, coefBSF: 3.556, Nb: 15 },
+  '7305': { coefBPFI: 6.057, coefBPFO: 3.943, coefBSF: 1.732, Nb: 10 },
+  'NU205E': { coefBPFI: 7.75, coefBPFO: 5.25, coefBSF: 2.504, Nb: 13 },
+  '7205': { coefBPFI: 7.527, coefBPFO: 5.473, coefBSF: 2.365, Nb: 13 },
+  '6208': { coefBPFI: 4.927, coefBPFO: 3.073, coefBSF: 4.082, Nb: 8 },
+  '6308': { coefBPFI: 4.433, coefBPFO: 2.567, coefBSF: 3.485, Nb: 7 },
+  // — Geometría (marcadores de posición; sustituir por datos reales) —
   '6210': { Nb: 10, Bd: 12.7, Pd: 70.0, theta: 0 },
   '6312': { Nb: 8, Bd: 22.2, Pd: 92.5, theta: 0 },
   'NU2216': { Nb: 13, Bd: 18.0, Pd: 108.0, theta: 0 },
@@ -137,7 +149,8 @@ var SEED = {
   // Equipos: TAG | Serie | Familia | Airend | Motor | RPM_motor | Variador | FL_Hz | Polos | Arranque | Notas
   equipos: [
     ['CSD-102', 'CSD 105', 'LUBRICADO', 'SIGMA-CSD105', 'MOT-45KW-2P', 2970, 'No', 60, 2, 'Estrella-Triángulo', 'EJEMPLO — reemplazar por datos reales'],
-    ['DSG-220', 'DSG 220-2', 'DRY_SCREW', 'AIR-DSG220', 'MOT-160KW-2P', 3560, 'Sí', 60, 2, 'SFC (variador)', 'EJEMPLO — máquina engranada de 2 etapas']
+    ['DSG-220', 'DSG 220-2', 'DRY_SCREW', 'AIR-DSG220', 'MOT-160KW-2P', 3560, 'Sí', 60, 2, 'SFC (variador)', 'EJEMPLO — máquina engranada de 2 etapas'],
+    ['SK20-01', 'SK 20 Sigma 10', 'LUBRICADO', 'SIGMA-10', 'MOT-SK20-2P', 3565, 'No', 60, 2, 'Estrella-Triángulo', 'Transmisión por correa: poleas 142/123 mm → relación 1.1545. Datos de la tabla de frecuencias SK20.']
   ],
   // Posiciones: TAG | Sensor | Posicion | Unidad | Rodamiento | Relacion_vel | Vel_aviso | Vel_cond | Acel_aviso_g | Acel_cond_g | gSE_aviso | gSE_cond | N_lobulos | N_dientes
   posiciones: [
@@ -150,17 +163,26 @@ var SEED = {
     ['DSG-220', 1, 'Etapa 1 (no impulsor)', 'airend', '7310', 3.20, 4.5, 7.1, 4.0, 8.0, 2.0, 5.0, 3, 37],
     ['DSG-220', 2, 'Etapa 2 (no impulsor)', 'airend', '7310', 5.10, 4.5, 7.1, 4.0, 8.0, 2.0, 5.0, 3, 37],
     ['DSG-220', 3, 'Gear Box', 'gearbox', '6312', 1.0, 2.8, 4.5, 3.0, 6.0, 1.5, 4.0, '', 37],
-    ['DSG-220', 4, 'Motor lado DE', 'motor', '6312', 1.0, 2.8, 4.5, 2.0, 4.0, 1.0, 3.0, '', '']
+    ['DSG-220', 4, 'Motor lado DE', 'motor', '6312', 1.0, 2.8, 4.5, 2.0, 4.0, 1.0, 3.0, '', ''],
+    // SK20 Sigma 10: correa 142/123 → tornillo a 1.1545× motor (59.4 → 68.6 Hz).
+    // Varias referencias por posición separadas por coma. Lóbulos=5 (pasos de
+    // presión 343 Hz = 5 × 68.6). Límites de EJEMPLO: cargar los reales.
+    ['SK20-01', 1, 'Motor lado B (NDE)', 'motor', '6308', 1.0, 2.8, 4.5, 2.0, 4.0, 1.0, 3.0, '', ''],
+    ['SK20-01', 2, 'Motor lado A (polea)', 'motor', '6208', 1.0, 2.8, 4.5, 2.0, 4.0, 1.0, 3.0, '', ''],
+    ['SK20-01', 3, 'Airend admisión (macho+hembra)', 'airend', 'NU206E,NA4904', 1.1545, 4.5, 7.1, 3.0, 6.0, 1.5, 4.0, 5, ''],
+    ['SK20-01', 4, 'Airend compresión (macho+hembra)', 'airend', 'NU206E,7305,NU205E,7205', 1.1545, 4.5, 7.1, 3.0, 6.0, 1.5, 4.0, 5, '']
   ],
   // UnidadesCompresoras: Codigo | Familia | Rod_admision | Rod_compresion | N_lobulos | N_dientes | Relacion_default
   unidades: [
     ['SIGMA-CSD105', 'LUBRICADO', 'NU2216', 'NU2216', 5, '', 1.0],
-    ['AIR-DSG220', 'DRY_SCREW', '7310', '7310', 3, 37, 3.20]
+    ['AIR-DSG220', 'DRY_SCREW', '7310', '7310', 3, 37, 3.20],
+    ['SIGMA-10', 'LUBRICADO', 'NU206E,NA4904', 'NU206E,7305,NU205E,7205', 5, '', 1.1545]
   ],
   // Motores: Codigo | Rod_DE | Rod_NDE | Polos
   motores: [
     ['MOT-45KW-2P', '6208', '6210', 2],
-    ['MOT-160KW-2P', '6312', '6312', 2]
+    ['MOT-160KW-2P', '6312', '6312', 2],
+    ['MOT-SK20-2P', '6208', '6308', 2]
   ]
 };
 
