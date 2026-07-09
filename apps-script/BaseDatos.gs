@@ -67,11 +67,21 @@ function apiEquipo(tag) {
   var rpmMotor = Number(eq.RPM_motor) || 0;
   var rods = mapaRodamientos_();
 
+  // Transmisión: la del equipo, o clasificada por la regla de la "D".
+  var transmision = String(eq.Transmision || '').trim() ||
+    clasificarTransmision_(eq.Familia, eq.Serie || eq.TAG);
+  var poleaMotor = Number(eq.Polea_motor_mm) || 0;
+  var poleaAirend = Number(eq.Polea_airend_mm) || 0;
+
   var posiciones = leerTabla_(HOJAS.POSICIONES)
     .filter(function (p) { return String(p.TAG) === String(tag); })
     .sort(function (a, b) { return (Number(a.Sensor) || 0) - (Number(b.Sensor) || 0); })
     .map(function (p) {
-      var relacion = Number(p.Relacion_vel) || 1;
+      var unidad = String(p.Unidad || '');
+      // Relación: la explícita de la hoja; si está vacía, se deriva de la
+      // transmisión (correa → razón de poleas en airend; directa → 1).
+      var relacion = Number(p.Relacion_vel) ||
+        relacionDerivada_(unidad, transmision, poleaMotor, poleaAirend);
       var ref = String(p.Rodamiento || '');
       // Varias referencias por posición, separadas por coma ("NU206E,NA4904").
       var lista = ref.split(',').map(function (x) { return x.trim(); }).filter(String)
@@ -79,7 +89,7 @@ function apiEquipo(tag) {
       return {
         sensor: Number(p.Sensor),
         posicion: String(p.Posicion || ''),
-        unidad: String(p.Unidad || ''),
+        unidad: unidad,
         rodamiento: ref,
         rodamientos: lista,           // [{ref, geo}] resueltos contra la hoja
         geometria: lista.length === 1 ? lista[0].geo : null,
@@ -106,6 +116,9 @@ function apiEquipo(tag) {
       airend: String(eq.Airend || ''),
       motor: String(eq.Motor || ''),
       rpmMotor: rpmMotor,
+      transmision: transmision,
+      poleaMotor: poleaMotor || null,
+      poleaAirend: poleaAirend || null,
       variador: String(eq.Variador || ''),
       FL: Number(eq.FL_Hz) || null,
       polos: Number(eq.Polos) || null,
@@ -114,4 +127,18 @@ function apiEquipo(tag) {
     },
     posiciones: posiciones
   };
+}
+
+/**
+ * Relación de velocidad derivada de la transmisión cuando no está explícita.
+ *  - Correa: airend gira a Polea_motor/Polea_airend; motor/gearbox = 1.
+ *  - Directa: todo a 1 (acople directo, screw = motor).
+ *  - Engranaje: 1 por defecto (la multiplicadora real debe ir en Posiciones).
+ */
+function relacionDerivada_(unidad, transmision, poleaMotor, poleaAirend) {
+  var u = String(unidad || '').toLowerCase();
+  if (transmision === 'Correa' && u === 'airend' && poleaMotor > 0 && poleaAirend > 0) {
+    return poleaMotor / poleaAirend;
+  }
+  return 1;
 }

@@ -146,11 +146,11 @@ var RODAMIENTOS_REF = {
  * de referencia oficial: son marcadores de posición para mostrar la estructura.
  */
 var SEED = {
-  // Equipos: TAG | Serie | Familia | Airend | Motor | RPM_motor | Variador | FL_Hz | Polos | Arranque | Notas
+  // Equipos: TAG | Serie | Familia | Airend | Motor | RPM_motor | Transmision | Polea_motor_mm | Polea_airend_mm | Variador | FL_Hz | Polos | Arranque | Notas
   equipos: [
-    ['CSD-102', 'CSD 105', 'LUBRICADO', 'SIGMA-CSD105', 'MOT-45KW-2P', 2970, 'No', 60, 2, 'Estrella-Triángulo', 'EJEMPLO — reemplazar por datos reales'],
-    ['DSG-220', 'DSG 220-2', 'DRY_SCREW', 'AIR-DSG220', 'MOT-160KW-2P', 3560, 'Sí', 60, 2, 'SFC (variador)', 'EJEMPLO — máquina engranada de 2 etapas'],
-    ['SK20-01', 'SK 20 Sigma 10', 'LUBRICADO', 'SIGMA-10', 'MOT-SK20-2P', 3565, 'No', 60, 2, 'Estrella-Triángulo', 'Transmisión por correa: poleas 142/123 mm → relación 1.1545. Datos de la tabla de frecuencias SK20.']
+    ['CSD-102', 'CSD 105', 'LUBRICADO', 'SIGMA-CSD105', 'MOT-45KW-2P', 2970, 'Directa', '', '', 'No', 60, 2, 'Estrella-Triángulo', 'EJEMPLO — "D" en la referencia → acople directo (relación 1.0)'],
+    ['DSG-220', 'DSG 220-2', 'DRY_SCREW', 'AIR-DSG220', 'MOT-160KW-2P', 3560, 'Engranaje', '', '', 'Sí', 60, 2, 'SFC (variador)', 'EJEMPLO — Dry Screw engranado (relaciones por etapa en Posiciones)'],
+    ['SK20-01', 'SK 20 Sigma 10', 'LUBRICADO', 'SIGMA-10', 'MOT-SK20-2P', 3565, 'Correa', 142, 123, 'No', 60, 2, 'Estrella-Triángulo', 'Sin "D" → correa. Poleas 142/123 → relación 1.1545 (tabla SK20).']
   ],
   // Posiciones: TAG | Sensor | Posicion | Unidad | Rodamiento | Relacion_vel | Vel_aviso | Vel_cond | Acel_aviso_g | Acel_cond_g | gSE_aviso | gSE_cond | N_lobulos | N_dientes
   posiciones: [
@@ -185,6 +185,23 @@ var SEED = {
     ['MOT-SK20-2P', '6208', '6308', 2]
   ]
 };
+
+/**
+ * Clasifica el tipo de transmisión de un equipo.
+ * Regla de campo (Kaeser Colombia): la "D" en la referencia indica acople
+ * directo; sin "D" es por correa. PERO los Dry Screw (CSG/DSG/FSG) son
+ * engranados aunque la "D" diga otra cosa, así que la Familia manda primero.
+ *
+ * @param {string} familia p.ej. 'DRY_SCREW' | 'LUBRICADO'
+ * @param {string} ref referencia/serie del equipo (p.ej. 'CSD 105', 'SK 20')
+ * @return {'Correa'|'Directa'|'Engranaje'}
+ */
+function clasificarTransmision_(familia, ref) {
+  var f = String(familia || '').toUpperCase();
+  var r = String(ref || '').toUpperCase();
+  if (f.indexOf('DRY') >= 0 || /\b(CSG|DSG|FSG)\b/.test(r) || /(CSG|DSG|FSG)/.test(r)) return 'Engranaje';
+  return /D/.test(r) ? 'Directa' : 'Correa';
+}
 
 /** Convierte grados a radianes. */
 function gradosARad_(g) { return g * Math.PI / 180; }

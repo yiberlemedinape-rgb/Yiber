@@ -94,6 +94,21 @@ guarda la **relación de transmisión** por posición; ingresas solo la **RPM de
 motor** y el sistema deriva la RPM real de cada sensor — con ella calcula
 órdenes y frecuencias de defecto correctos.
 
+**Clasificación de transmisión (columna `Equipos.Transmision`):**
+
+| Referencia | Transmisión | Relación (auto) |
+|---|---|---|
+| Sin "D" (SK, SM, SX, ASK…) | `Correa` | `Polea_motor / Polea_airend` (columnas de `Equipos`) |
+| Con "D" (CSD, DSD, HSD…) | `Directa` | `1.0` (acople directo) |
+| Dry Screw (CSG, DSG, FSG) | `Engranaje` | relación por etapa de `Posiciones` |
+
+La regla de la "D" se aplica sola (menú **Sugerir transmisión**), pero la
+**Familia manda primero**: los Dry Screw son engranados aunque su referencia
+lleve o no "D". Si `Transmision` o `Relacion_vel` están vacíos, el sistema los
+deriva; puedes fijar cualquiera manualmente y se respeta. Para correa solo
+digitas los **diámetros de polea** (`Polea_motor_mm`, `Polea_airend_mm`) y el
+sistema calcula la relación.
+
 ### Cómo migrar una tabla de frecuencias tipo Excel (ej. SK20 Sigma 10)
 
 | Dato del Excel | Dónde va |

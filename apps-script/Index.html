@@ -204,8 +204,13 @@
         // Ajustar familia si coincide.
         var fam = document.getElementById('familia');
         for (var i = 0; i < fam.options.length; i++) if (fam.options[i].value === r.equipo.familia) fam.selectedIndex = i;
+        var trans = r.equipo.transmision +
+          (r.equipo.transmision === 'Correa' && r.equipo.poleaMotor ?
+            ' (poleas ' + r.equipo.poleaMotor + '/' + r.equipo.poleaAirend + ' → ×' +
+            (r.equipo.poleaMotor / r.equipo.poleaAirend).toFixed(4) + ')' : '');
         document.getElementById('equipoInfo').innerHTML = 'Airend <b>' + r.equipo.airend + '</b> · Motor <b>' +
-          r.equipo.motor + '</b> · ' + (r.equipo.variador === 'Sí' ? 'con variador' : 'velocidad fija') +
+          r.equipo.motor + '</b> · Transmisión <b>' + trans + '</b> · ' +
+          (r.equipo.variador === 'Sí' ? 'con variador' : 'velocidad fija') +
           ' · Arranque ' + r.equipo.arranque;
         pintarMontaje(); pintarCarga();
       }).apiEquipo(tag);

@@ -13,6 +13,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('🔧 Diagnóstico Kaeser')
     .addItem('Inicializar hojas', 'inicializarHojas')
+    .addItem('Sugerir transmisión (regla "D")', 'sugerirTransmision')
     .addItem('Abrir interfaz web (URL)', 'mostrarUrlWebApp')
     .addSeparator()
     .addItem('Acerca de', 'acercaDe')
@@ -118,7 +119,7 @@ function aNumero_(s) {
 function inicializarHojas() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var defs = {};
-  defs[HOJAS.EQUIPOS] = ['TAG', 'Serie', 'Familia', 'Airend', 'Motor', 'RPM_motor', 'Variador', 'FL_Hz', 'Polos', 'Arranque', 'Notas'];
+  defs[HOJAS.EQUIPOS] = ['TAG', 'Serie', 'Familia', 'Airend', 'Motor', 'RPM_motor', 'Transmision', 'Polea_motor_mm', 'Polea_airend_mm', 'Variador', 'FL_Hz', 'Polos', 'Arranque', 'Notas'];
   defs[HOJAS.POSICIONES] = ['TAG', 'Sensor', 'Posicion', 'Unidad', 'Rodamiento', 'Relacion_vel', 'Vel_aviso_mm_s', 'Vel_cond_mm_s', 'Acel_aviso_g', 'Acel_cond_g', 'gSE_aviso', 'gSE_cond', 'N_lobulos', 'N_dientes'];
   defs[HOJAS.UNIDADES] = ['Codigo', 'Familia', 'Rod_admision', 'Rod_compresion', 'N_lobulos', 'N_dientes', 'Relacion_default'];
   defs[HOJAS.MOTORES] = ['Codigo', 'Rod_DE', 'Rod_NDE', 'Polos'];
@@ -173,6 +174,35 @@ function sembrarHoja_(ss, nombre, filas) {
   var sh = ss.getSheetByName(nombre);
   if (sh.getLastRow() > 1) return; // ya tiene datos: no sobreescribir
   sh.getRange(2, 1, filas.length, filas[0].length).setValues(filas);
+}
+
+/**
+ * Rellena la columna Transmision de los equipos que la tengan vacía, aplicando
+ * la regla de la "D" (con Familia como guarda para Dry Screw). No sobrescribe
+ * valores ya definidos por el usuario.
+ */
+function sugerirTransmision() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(HOJAS.EQUIPOS);
+  if (!sh || sh.getLastRow() < 2) { SpreadsheetApp.getUi().alert('No hay equipos.'); return; }
+  var datos = sh.getDataRange().getValues();
+  var head = datos[0];
+  var cTrans = head.indexOf('Transmision');
+  var cFam = head.indexOf('Familia');
+  var cSerie = head.indexOf('Serie');
+  var cTag = head.indexOf('TAG');
+  if (cTrans < 0) { SpreadsheetApp.getUi().alert('Falta la columna Transmision. Corre "Inicializar hojas".'); return; }
+
+  var cambios = 0;
+  for (var i = 1; i < datos.length; i++) {
+    if (String(datos[i][cTrans]).trim()) continue; // respetar lo ya definido
+    var ref = datos[i][cSerie] || datos[i][cTag];
+    var t = clasificarTransmision_(datos[i][cFam], ref);
+    sh.getRange(i + 1, cTrans + 1).setValue(t);
+    cambios++;
+  }
+  SpreadsheetApp.getUi().alert('Transmisión sugerida en ' + cambios + ' equipo(s).\n' +
+    'Revisa los engranados/sopladores por si la regla de la "D" no aplica.');
 }
 
 /** Registra el diagnóstico en la hoja "Diagnostico". */
