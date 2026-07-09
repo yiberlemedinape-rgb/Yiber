@@ -1,0 +1,383 @@
+<script>
+/**
+ * Dsp.html — Procesamiento de señal en el NAVEGADOR (datos brutos VES004).
+ * ---------------------------------------------------------------------------
+ * Pipeline por sensor:
+ *   CSV bruto (forma de onda temporal, aceleración en mg)
+ *     → detección de frecuencia de muestreo (columna de tiempo o manual)
+ *     → espectro de ACELERACIÓN (Welch: segmentos Hanning promediados)
+ *     → espectro de VELOCIDAD (integración en frecuencia: V = A/(2πf))
+ *     → valores globales: a-RMS (g) en tiempo, v-RMS (mm/s) en banda 10–1000 Hz
+ *     → picos espectrales para el motor de diagnóstico (servidor)
+ *     → gráficos: espectro con marcas 1X/2X/3X, pasos de presión y bandas de
+ *       falla de rodamiento ±10%; onda circular (polar) por revoluciones.
+ *
+ * Metodología: ventana Hanning (CG=0.5, NG=0.375), espectro en amplitud RMS
+ * por bin, overall por Parseval en banda. Todo el DSP ocurre en el cliente
+ * para no cargar al servidor de Apps Script con millones de muestras.
+ * ---------------------------------------------------------------------------
+ */
+
+var DSP = (function () {
+  'use strict';
+
+  /* ========================= PARSER DE RAW ========================= */
+
+  /**
+   * Parsea un CSV de datos brutos. Acepta:
+   *  - 2+ columnas numéricas: [tiempo, amplitud] (tiempo en s o ms)
+   *  - 1 columna numérica: amplitud pura (requiere fs manual)
+   * Devuelve { senal: Float64Array, fsDetectada: number|null, nLineas }
+   */
+  function parseRaw(texto) {
+    var lineas = String(texto || '').split(/\r?\n/);
+    var t = [], a = [], unaCol = [];
+    for (var i = 0; i < lineas.length; i++) {
+      var L = lineas[i]; if (!L || !L.trim()) continue;
+      var campos = L.split(/[;\t]+|,(?=\s*-?\d)/); // ; tab o coma-separador
+      var nums = [];
+      for (var j = 0; j < campos.length && nums.length < 2; j++) {
+        var s = campos[j].trim();
+        if (/^-?\d+,\d+$/.test(s)) s = s.replace(',', '.');
+        var v = parseFloat(s);
+        if (isFinite(v)) nums.push(v);
+      }
+      if (nums.length >= 2) { t.push(nums[0]); a.push(nums[1]); }
+      else if (nums.length === 1) unaCol.push(nums[0]);
+    }
+    var fs = null, senal;
+    if (a.length > unaCol.length && a.length > 16) {
+      senal = Float64Array.from(a);
+      // fs desde la mediana de dt; autodetecta ms vs s.
+      var dts = [];
+      for (var k = 1; k < Math.min(t.length, 2000); k++) {
+        var d = t[k] - t[k - 1]; if (d > 0) dts.push(d);
+      }
+      if (dts.length) {
+        dts.sort(function (x, y) { return x - y; });
+        var dt = dts[Math.floor(dts.length / 2)];
+        fs = 1 / dt;
+        if (fs < 20) fs = 1000 / dt;        // tiempo probablemente en ms
+        if (fs < 20) fs = null;             // no confiable
+      }
+    } else {
+      senal = Float64Array.from(unaCol.length >= a.length ? unaCol : a);
+    }
+    return { senal: senal, fsDetectada: fs ? Math.round(fs) : null, nLineas: senal.length };
+  }
+
+  /* ============================== FFT ============================== */
+
+  /** FFT radix-2 in-place (re, im Float64Array, longitud potencia de 2). */
+  function fft(re, im) {
+    var n = re.length;
+    for (var i = 1, j = 0; i < n; i++) {   // bit reversal
+      var bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        var tr = re[i]; re[i] = re[j]; re[j] = tr;
+        var ti = im[i]; im[i] = im[j]; im[j] = ti;
+      }
+    }
+    for (var len = 2; len <= n; len <<= 1) {
+      var ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (var s = 0; s < n; s += len) {
+        var cr = 1, ci = 0;
+        for (var m = 0; m < len / 2; m++) {
+          var i1 = s + m, i2 = s + m + len / 2;
+          var xr = re[i2] * cr - im[i2] * ci;
+          var xi = re[i2] * ci + im[i2] * cr;
+          re[i2] = re[i1] - xr; im[i2] = im[i1] - xi;
+          re[i1] += xr; im[i1] += xi;
+          var ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+        }
+      }
+    }
+  }
+
+  /**
+   * Espectro Welch de amplitud RMS por bin (una cara).
+   * @return {{freqs:Float64Array, ampRMS:Float64Array, df:number, NG:number, potencia:Float64Array}}
+   */
+  function espectroWelch(senal, fs, nfftMax) {
+    var N = senal.length;
+    var nfft = 1; while (nfft * 2 <= Math.min(N, nfftMax || 65536)) nfft *= 2;
+    if (nfft < 256) return null;
+    var hop = nfft / 2, nSeg = Math.max(1, Math.min(16, Math.floor((N - nfft) / hop) + 1));
+    // quitar DC global
+    var media = 0; for (var i = 0; i < N; i++) media += senal[i]; media /= N;
+
+    var win = new Float64Array(nfft), CG = 0, NG = 0;
+    for (var w = 0; w < nfft; w++) {
+      win[w] = 0.5 - 0.5 * Math.cos(2 * Math.PI * w / (nfft - 1));  // Hanning
+      CG += win[w]; NG += win[w] * win[w];
+    }
+    CG /= nfft; NG /= nfft;
+
+    var half = nfft / 2;
+    var acumP = new Float64Array(half);
+    for (var seg = 0; seg < nSeg; seg++) {
+      var off = seg * hop;
+      var re = new Float64Array(nfft), im = new Float64Array(nfft);
+      for (var k = 0; k < nfft; k++) re[k] = (senal[off + k] - media) * win[k];
+      fft(re, im);
+      for (var b = 0; b < half; b++) acumP[b] += re[b] * re[b] + im[b] * im[b];
+    }
+    var freqs = new Float64Array(half), ampRMS = new Float64Array(half), pot = new Float64Array(half);
+    var df = fs / nfft;
+    for (var q = 0; q < half; q++) {
+      var P = acumP[q] / nSeg;
+      freqs[q] = q * df;
+      // amplitud pico de senoide = 2·|X|/(N·CG); RMS = /√2
+      ampRMS[q] = (2 * Math.sqrt(P) / (nfft * CG)) / Math.SQRT2;
+      // potencia con corrección de ventana (para overall por Parseval)
+      pot[q] = 2 * P / (nfft * nfft * NG);
+    }
+    return { freqs: freqs, ampRMS: ampRMS, potencia: pot, df: df, NG: NG };
+  }
+
+  /* ==================== CONVERSIONES / GLOBALES ==================== */
+
+  var G_MS2 = 9.80665;
+
+  /**
+   * Espectro de velocidad (mm/s RMS por bin) desde el de aceleración en mg.
+   * V(f) = A(f) / (2πf).  Se omite f < 2 Hz (ruido de integración).
+   */
+  function espectroVelocidad(esp) {
+    var v = new Float64Array(esp.ampRMS.length);
+    var pv = new Float64Array(esp.ampRMS.length);
+    for (var i = 0; i < esp.ampRMS.length; i++) {
+      var f = esp.freqs[i];
+      if (f < 2) { v[i] = 0; pv[i] = 0; continue; }
+      var w = 2 * Math.PI * f;
+      var aMs2 = esp.ampRMS[i] * G_MS2 / 1000;         // mg → m/s²
+      v[i] = (aMs2 / w) * 1000;                         // m/s → mm/s
+      var pMs2 = esp.potencia[i] * Math.pow(G_MS2 / 1000, 2);
+      pv[i] = (pMs2 / (w * w)) * 1e6;                   // (mm/s)²
+    }
+    return { freqs: esp.freqs, ampRMS: v, potencia: pv, df: esp.df };
+  }
+
+  /** a-RMS global en g desde la forma de onda (mg). */
+  function aRMSg(senal) {
+    var s = 0, media = 0, N = senal.length;
+    for (var i = 0; i < N; i++) media += senal[i]; media /= N;
+    for (var j = 0; j < N; j++) { var d = senal[j] - media; s += d * d; }
+    return Math.sqrt(s / N) / 1000;
+  }
+
+  /** Overall RMS en una banda [f1,f2] por Parseval sobre el espectro. */
+  function overallBanda(esp, f1, f2) {
+    var s = 0;
+    for (var i = 0; i < esp.freqs.length; i++) {
+      if (esp.freqs[i] >= f1 && esp.freqs[i] <= f2) s += esp.potencia[i];
+    }
+    return Math.sqrt(s);
+  }
+
+  /**
+   * Distribución de energía por bandas de órdenes (metodología de bandas):
+   * sub-síncrona (<0.8X), síncrona (0.8–3.5X), medias (3.5–10X), altas (>10X).
+   * Devuelve porcentajes — apoya la interpretación (holgura, rodamiento, etc.).
+   */
+  function energiaBandas(esp, fr) {
+    if (!fr) return null;
+    var b = { sub: 0, sinc: 0, media: 0, alta: 0 };
+    for (var i = 0; i < esp.freqs.length; i++) {
+      var o = esp.freqs[i] / fr, p = esp.potencia[i];
+      if (esp.freqs[i] < 2) continue;
+      if (o < 0.8) b.sub += p; else if (o < 3.5) b.sinc += p;
+      else if (o < 10) b.media += p; else b.alta += p;
+    }
+    var tot = b.sub + b.sinc + b.media + b.alta || 1;
+    return {
+      sub: Math.round(100 * b.sub / tot), sinc: Math.round(100 * b.sinc / tot),
+      media: Math.round(100 * b.media / tot), alta: Math.round(100 * b.alta / tot)
+    };
+  }
+
+  /**
+   * Extrae hasta nMax picos (máximos locales) como [[f, ampRMS], ...].
+   * La amplitud del pico se estima por ENERGÍA local (Parseval sobre ±3 bins
+   * del lóbulo): elimina la pérdida por scalloping de la ventana Hanning y da
+   * el RMS verdadero del tono aunque no caiga centrado en un bin.
+   */
+  function picos(esp, nMax, fMin, fMax) {
+    var out = [];
+    var n = esp.freqs.length;
+    for (var i = 3; i < n - 3; i++) {
+      var f = esp.freqs[i];
+      if (f < (fMin || 2) || (fMax && f > fMax)) continue;
+      var a = esp.ampRMS[i];
+      if (a > esp.ampRMS[i - 1] && a >= esp.ampRMS[i + 1] &&
+          a > esp.ampRMS[i - 2] && a >= esp.ampRMS[i + 2]) {
+        var e = 0;
+        for (var k = i - 3; k <= i + 3; k++) e += esp.potencia[k];
+        out.push([f, Math.sqrt(e)]);
+      }
+    }
+    out.sort(function (x, y) { return y[1] - x[1]; });
+    out = out.slice(0, nMax || 300);
+    out.sort(function (x, y) { return x[0] - y[0]; });
+    return out.map(function (p) { return [Math.round(p[0] * 100) / 100, p[1]]; });
+  }
+
+  /* ======================= FRECUENCIAS (cliente) ======================= */
+
+  /** Frecuencias de defecto en cliente (coeficientes o geometría). */
+  function frecRodamiento(def, fr) {
+    if (!def || !fr) return null;
+    if (def.coefBPFO || def.coefBPFI) {
+      return {
+        BPFI: (def.coefBPFI || 0) * fr, BPFO: (def.coefBPFO || 0) * fr,
+        BSF: (def.coefBSF || 0) * fr,
+        FTF: def.Nb && def.coefBPFO ? (def.coefBPFO / def.Nb) * fr : 0
+      };
+    }
+    var r = (def.Bd / def.Pd) * Math.cos((def.theta || 0) * Math.PI / 180);
+    return {
+      FTF: (fr / 2) * (1 - r), BPFO: (def.Nb / 2) * fr * (1 - r),
+      BPFI: (def.Nb / 2) * fr * (1 + r), BSF: (def.Pd / (2 * def.Bd)) * fr * (1 - r * r)
+    };
+  }
+
+  /* ============================ GRÁFICOS ============================ */
+
+  /**
+   * Espectro en canvas con marcadores:
+   *  - 1X/2X/3X (líneas azules), pasos de presión (línea verde),
+   *  - bandas de rodamiento ±tol (franjas rojas translúcidas + etiqueta).
+   * marcadores = { fr, lobulos, rodamientos:[{ref, frec:{BPFI,BPFO,BSF,FTF}}], tolRod }
+   */
+  function dibujarEspectro(canvas, esp, fMax, unidad, marcadores) {
+    var ctx = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height, mL = 46, mB = 26, mT = 14, mR = 8;
+    ctx.clearRect(0, 0, W, H);
+    var n = 0; while (n < esp.freqs.length && esp.freqs[n] <= fMax) n++;
+    var yMax = 0;
+    for (var i = 1; i < n; i++) if (esp.ampRMS[i] > yMax) yMax = esp.ampRMS[i];
+    if (!yMax) yMax = 1;
+    yMax *= 1.15;
+    var px = function (f) { return mL + (f / fMax) * (W - mL - mR); };
+    var py = function (a) { return H - mB - (a / yMax) * (H - mB - mT); };
+
+    // ejes + grilla
+    ctx.strokeStyle = '#c9d2dc'; ctx.fillStyle = '#5a6b7c';
+    ctx.font = '10px sans-serif'; ctx.lineWidth = 1;
+    ctx.strokeRect(mL, mT, W - mL - mR, H - mB - mT);
+    for (var g = 1; g <= 4; g++) {
+      var fg = fMax * g / 5;
+      ctx.beginPath(); ctx.moveTo(px(fg), mT); ctx.lineTo(px(fg), H - mB);
+      ctx.strokeStyle = '#eef2f6'; ctx.stroke();
+      ctx.fillText(Math.round(fg) + '', px(fg) - 10, H - mB + 12);
+    }
+    ctx.fillText('Hz', W - mR - 16, H - 4);
+    ctx.fillText(yMax.toPrecision(2), 2, mT + 8);
+    ctx.fillText(unidad, 2, mT + 20);
+
+    var m = marcadores || {};
+    // bandas de rodamiento ±tol
+    if (m.rodamientos) {
+      m.rodamientos.forEach(function (rod) {
+        if (!rod.frec) return;
+        ['BPFI', 'BPFO', 'BSF', 'FTF'].forEach(function (k) {
+          var f = rod.frec[k];
+          if (!f || f > fMax) return;
+          var tol = (m.tolRod || 0.1) * f;
+          ctx.fillStyle = 'rgba(204,43,43,0.10)';
+          ctx.fillRect(px(f - tol), mT, px(f + tol) - px(f - tol), H - mB - mT);
+          ctx.strokeStyle = 'rgba(204,43,43,0.55)';
+          ctx.beginPath(); ctx.moveTo(px(f), mT); ctx.lineTo(px(f), H - mB); ctx.stroke();
+          ctx.fillStyle = '#a02020';
+          ctx.fillText((m.rodamientos.length > 1 ? rod.ref + ' ' : '') + k, px(f) + 2, mT + 10 + 11 * ['BPFI', 'BPFO', 'BSF', 'FTF'].indexOf(k));
+        });
+      });
+    }
+    // 1X..3X
+    if (m.fr) {
+      for (var o = 1; o <= 3; o++) {
+        var fo = m.fr * o; if (fo > fMax) break;
+        ctx.strokeStyle = 'rgba(0,75,141,0.65)';
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(px(fo), mT); ctx.lineTo(px(fo), H - mB); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#004b8d'; ctx.fillText(o + 'X', px(fo) + 2, mT + 10);
+      }
+      // pasos de presión
+      if (m.lobulos) {
+        var fp = m.fr * m.lobulos;
+        if (fp <= fMax) {
+          ctx.strokeStyle = 'rgba(30,158,74,0.8)';
+          ctx.setLineDash([6, 3]);
+          ctx.beginPath(); ctx.moveTo(px(fp), mT); ctx.lineTo(px(fp), H - mB); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#157a3a'; ctx.fillText('PP(' + m.lobulos + 'X)', px(fp) + 2, mT + 22);
+        }
+      }
+    }
+    // traza del espectro
+    ctx.strokeStyle = '#1b2733'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var s = 1; s < n; s++) {
+      var X = px(esp.freqs[s]), Y = py(esp.ampRMS[s]);
+      if (s === 1) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    }
+    ctx.stroke();
+  }
+
+  /**
+   * Onda circular: la forma de onda envuelta sobre la revolución del eje
+   * (r = base + amplitud, θ = ángulo del eje). Impactos 1/rev quedan siempre
+   * en el mismo ángulo — ideal para rodamientos/engranes.
+   */
+  function dibujarCircular(canvas, senal, fs, fr, nRev) {
+    var ctx = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height, cx = W / 2, cy = H / 2;
+    ctx.clearRect(0, 0, W, H);
+    if (!fr || !fs) {
+      ctx.fillStyle = '#888'; ctx.fillText('Sin RPM/fs no hay onda circular', 12, H / 2);
+      return;
+    }
+    nRev = nRev || 2;
+    var nPorRev = fs / fr;
+    var N = Math.min(senal.length, Math.floor(nPorRev * nRev));
+    var maxA = 1e-9;
+    var media = 0; for (var i0 = 0; i0 < N; i0++) media += senal[i0]; media /= N;
+    for (var i1 = 0; i1 < N; i1++) { var d = Math.abs(senal[i1] - media); if (d > maxA) maxA = d; }
+    var rBase = Math.min(W, H) * 0.30, rGain = Math.min(W, H) * 0.16 / maxA;
+
+    // círculo base + marca 0°
+    ctx.strokeStyle = '#dde3ea';
+    ctx.beginPath(); ctx.arc(cx, cy, rBase, 0, 2 * Math.PI); ctx.stroke();
+    ctx.strokeStyle = '#c00';
+    ctx.beginPath(); ctx.moveTo(cx + rBase - 6, cy); ctx.lineTo(cx + rBase + 6, cy); ctx.stroke();
+
+    ctx.strokeStyle = '#004b8d'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var i = 0; i < N; i++) {
+      var ang = 2 * Math.PI * (i / nPorRev);
+      var r = rBase + (senal[i] - media) * rGain;
+      var x = cx + r * Math.cos(ang), y = cy + r * Math.sin(ang);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#5a6b7c'; ctx.font = '10px sans-serif';
+    ctx.fillText(nRev + ' rev · fr=' + fr.toFixed(2) + ' Hz', 8, H - 8);
+  }
+
+  return {
+    parseRaw: parseRaw,
+    espectroWelch: espectroWelch,
+    espectroVelocidad: espectroVelocidad,
+    aRMSg: aRMSg,
+    overallBanda: overallBanda,
+    energiaBandas: energiaBandas,
+    picos: picos,
+    frecRodamiento: frecRodamiento,
+    dibujarEspectro: dibujarEspectro,
+    dibujarCircular: dibujarCircular
+  };
+})();
+</script>

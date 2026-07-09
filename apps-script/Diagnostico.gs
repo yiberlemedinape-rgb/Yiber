@@ -46,6 +46,12 @@ function diagnosticar(medicion) {
     ruidoAccel: ruidoDeFondo_(espectroAccel),
     limites: limitesEfectivos_(m)   // aviso/condenatorio por posición (o defaults)
   };
+  // Umbral de significancia: un pico cuenta si supera 3× el piso de ruido Y
+  // el 2% del pico dominante. Con listas de picos (datos brutos procesados en
+  // cliente) el piso queda muy bajo y sin este segundo criterio los micro-picos
+  // dispararían falsos positivos.
+  ctx.sig = Math.max(3 * ctx.ruido, 0.02 * maxAmp_(espectro));
+  ctx.sigAccel = Math.max(3 * ctx.ruidoAccel, 0.02 * maxAmp_(espectroAccel));
 
   var hallazgos = [];
 
@@ -113,16 +119,43 @@ function normalizarEspectro_(esp) {
     .sort(function (a, b) { return a[0] - b[0]; });
 }
 
-/** Amplitud del mayor pico dentro de la tolerancia alrededor de f (Hz). */
-function picoCerca_(espectro, f, fr) {
-  if (!f || !espectro.length) return 0;
-  var tol = Math.max(TOLERANCIA.fraccionObjetivo * f, TOLERANCIA.fraccionGiroMin * fr, 1e-6);
-  var max = 0;
+/** Amplitud del mayor pico dentro de la tolerancia alrededor de f (Hz).
+ *  tolFrac opcional: fracción de f que anula la tolerancia por defecto
+ *  (p.ej. 0.10 = ±10% para frecuencias de defecto de rodamiento). */
+function picoCerca_(espectro, f, fr, tolFrac) {
+  return picoCercaF_(espectro, f, fr, tolFrac).amp;
+}
+
+/** Igual que picoCerca_ pero devuelve también la frecuencia real del pico.
+ *  excluirSinc=true: ignora picos síncronos (1X..12X) dentro de la ventana —
+ *  así un paso de presión/armónico grande no enmascara un defecto de
+ *  rodamiento que convive en la misma banda ±10%. */
+function picoCercaF_(espectro, f, fr, tolFrac, excluirSinc) {
+  if (!f || !espectro.length) return { amp: 0, f: 0 };
+  var tol = tolFrac
+    ? tolFrac * f
+    : Math.max(TOLERANCIA.fraccionObjetivo * f, TOLERANCIA.fraccionGiroMin * fr, 1e-6);
+  var max = 0, fMax = 0;
   for (var i = 0; i < espectro.length; i++) {
     var d = Math.abs(espectro[i][0] - f);
-    if (d <= tol && espectro[i][1] > max) max = espectro[i][1];
+    if (d > tol) continue;
+    if (excluirSinc && esSincrono_(espectro[i][0], fr)) continue;
+    if (espectro[i][1] > max) { max = espectro[i][1]; fMax = espectro[i][0]; }
   }
-  return max;
+  return { amp: max, f: fMax };
+}
+
+/**
+ * ¿El pico es SÍNCRONO (armónico entero de fr)? Las frecuencias de defecto de
+ * rodamiento son no-síncronas por naturaleza: un pico que cae en 1X..12X
+ * (incluye pasos de presión y GMF) NO debe contarse como defecto de rodamiento
+ * aunque entre en la ventana ±10%. Criterio: |orden − entero| < 0.03.
+ */
+function esSincrono_(fPico, fr) {
+  if (!fr || !fPico) return false;
+  var o = fPico / fr;
+  var n = Math.round(o);
+  return n >= 1 && n <= 12 && Math.abs(o - n) < 0.03;
 }
 
 /**
@@ -148,6 +181,13 @@ function energiaTotal_(espectro) {
   return espectro.reduce(function (s, p) { return s + p[1]; }, 0);
 }
 
+/** Amplitud máxima del espectro (para el umbral de significancia). */
+function maxAmp_(espectro) {
+  var m = 0;
+  for (var i = 0; i < espectro.length; i++) if (espectro[i][1] > m) m = espectro[i][1];
+  return m;
+}
+
 /** Amplitud en un orden n·fr. */
 function amp_(ctx, n) { return picoCerca_(ctx.espectro, n * ctx.fr, ctx.fr); }
 
@@ -162,8 +202,11 @@ function reglaDesequilibrio_(ctx) {
   var a1 = amp_(ctx, 1), a2 = amp_(ctx, 2), a3 = amp_(ctx, 3);
   if (a1 <= 0) return null;
 
-  var dominante1X = a1 >= 2 * Math.max(a2, a3) && a1 > 3 * ctx.ruido;
+  var dominante1X = a1 >= 2 * Math.max(a2, a3) && a1 > ctx.sig;
   if (!dominante1X) return null;
+  // Un 1X limpio siempre existe: solo es hallazgo si su magnitud es relevante
+  // frente al límite de aviso de la posición (≥25%).
+  if (a1 < 0.25 * ctx.limites.velAviso) return null;
 
   var conf = 55;
   if (a1 >= 4 * Math.max(a2, a3)) conf += 20;         // 1X muy limpio
@@ -193,8 +236,9 @@ function reglaDesequilibrio_(ctx) {
 function reglaDesalineacion_(ctx) {
   if (!ctx.espectro.length || !ctx.fr) return null;
   var a1 = amp_(ctx, 1), a2 = amp_(ctx, 2), a3 = amp_(ctx, 3);
-  if (a2 <= 3 * ctx.ruido) return null;
+  if (a2 <= ctx.sig) return null;
   if (a2 < 0.5 * a1) return null; // 2X debe ser significativo respecto a 1X
+  if (a2 < 0.25 * ctx.limites.velAviso) return null; // magnitud irrelevante
 
   var subtipo, evid, conf = 55;
   if (ctx.dir === 'axial') {
@@ -209,7 +253,7 @@ function reglaDesalineacion_(ctx) {
     subtipo = 'General';
     evid = '2X elevado (' + redondear_(a2, 3) + ') respecto a 1X (' + redondear_(a1, 3) + ').';
   }
-  if (a3 > 3 * ctx.ruido) { conf += 5; evid += ' Presencia de 3X.'; }
+  if (a3 > ctx.sig) { conf += 5; evid += ' Presencia de 3X.'; }
 
   return {
     tipo: 'Desalineación',
@@ -231,9 +275,9 @@ function reglaHolguras_(ctx) {
   if (!ctx.espectro.length || !ctx.fr) return null;
   var a05 = amp_(ctx, 0.5), a15 = amp_(ctx, 1.5), a25 = amp_(ctx, 2.5);
   var armonicos = 0;
-  for (var n = 1; n <= 6; n++) if (amp_(ctx, n) > 3 * ctx.ruido) armonicos++;
+  for (var n = 1; n <= 6; n++) if (amp_(ctx, n) > ctx.sig) armonicos++;
 
-  var subArm = (a05 > 3 * ctx.ruido) || (a15 > 3 * ctx.ruido) || (a25 > 3 * ctx.ruido);
+  var subArm = (a05 > ctx.sig) || (a15 > ctx.sig) || (a25 > ctx.sig);
   if (!(subArm && armonicos >= 3)) return null;
 
   var conf = 60 + Math.min(armonicos * 4, 20);
@@ -274,11 +318,16 @@ function reglaRodamientos_(ctx) {
     if (!rod.geo || !ctx.fr) return;
     var frec = frecuenciasRodamiento(rod.geo, ctx.fr);
     var tag = lista.length > 1 ? rod.ref + ' ' : '';
+    var tolRod = TOLERANCIA.fraccionRodamiento;   // ±10% (criterio de campo)
     ['BPFO', 'BPFI', 'BSF', 'FTF'].forEach(function (k) {
-      var aV = ctx.espectro.length ? picoCerca_(ctx.espectro, frec[k], ctx.fr) : 0;
-      var aA = ctx.espectroAccel.length ? picoCerca_(ctx.espectroAccel, frec[k], ctx.fr) : 0;
-      if (aV > 3 * ctx.ruido) defVel.push(tag + k + '@' + frec[k] + 'Hz vel(' + redondear_(aV, 3) + ')');
-      else if (aA > 3 * ctx.ruidoAccel) defAccel.push(tag + k + '@' + frec[k] + 'Hz acc(' + redondear_(aA, 3) + ')');
+      // Solo picos NO-síncronos: 1X..12X (incluye PP/GMF) no son rodamiento.
+      var pV = ctx.espectro.length ? picoCercaF_(ctx.espectro, frec[k], ctx.fr, tolRod, true) : { amp: 0, f: 0 };
+      var pA = ctx.espectroAccel.length ? picoCercaF_(ctx.espectroAccel, frec[k], ctx.fr, tolRod, true) : { amp: 0, f: 0 };
+      if (pV.amp > ctx.sig) {
+        defVel.push(tag + k + '@' + frec[k] + 'Hz vel(' + redondear_(pV.amp, 3) + ' en ' + redondear_(pV.f, 1) + 'Hz)');
+      } else if (pA.amp > ctx.sigAccel) {
+        defAccel.push(tag + k + '@' + frec[k] + 'Hz acc(' + redondear_(pA.amp, 3) + ' en ' + redondear_(pA.f, 1) + 'Hz)');
+      }
     });
   });
   var defectos = defVel.concat(defAccel);
@@ -335,11 +384,11 @@ function reglaEngranajes_(ctx) {
   if (!ctx.m.engranaje || !ctx.m.engranaje.dientes || !ctx.espectro.length) return null;
   var gmf = frecuenciaEngrane(ctx.m.engranaje.dientes, ctx.fr);
   var aG = picoCerca_(ctx.espectro, gmf, ctx.fr);
-  if (aG <= 3 * ctx.ruido) return null;
+  if (aG <= ctx.sig) return null;
 
   var bandaSup = picoCerca_(ctx.espectro, gmf + ctx.fr, ctx.fr);
   var bandaInf = picoCerca_(ctx.espectro, gmf - ctx.fr, ctx.fr);
-  var conBandas = (bandaSup > 3 * ctx.ruido) || (bandaInf > 3 * ctx.ruido);
+  var conBandas = (bandaSup > ctx.sig) || (bandaInf > ctx.sig);
 
   return {
     tipo: 'Engranaje',
@@ -363,7 +412,7 @@ function reglaHidraulica_(ctx) {
   if (ctx.m.alabes && ctx.m.alabes.n && ctx.fr) {
     var bpf = frecuenciaPasoAlabes(ctx.m.alabes.n, ctx.fr);
     var aB = picoCerca_(ctx.espectro, bpf, ctx.fr);
-    if (aB > 3 * ctx.ruido) {
+    if (aB > ctx.sig) {
       out = {
         tipo: 'Fuerza hidráulica',
         subtipo: 'BPF (paso de álabes)',
@@ -403,7 +452,7 @@ function reglaCorreas_(ctx) {
   var hits = [];
   ['x1', 'x2', 'x3', 'x4'].forEach(function (k) {
     var a = picoCerca_(ctx.espectro, f[k], ctx.fr);
-    if (a > 3 * ctx.ruido) hits.push(k + '@' + f[k] + 'Hz');
+    if (a > ctx.sig) hits.push(k + '@' + f[k] + 'Hz');
   });
   if (!hits.length) return null;
   return {
@@ -433,17 +482,17 @@ function reglaMotorElectrico_(ctx) {
 
   var evid = [], subtipo = null, conf = 0;
 
-  if (a2FL > 3 * ctx.ruido) {
+  if (a2FL > ctx.sig) {
     subtipo = 'Excentricidad de estator / entrehierro (2·FL)';
     conf = 65;
     evid.push('2·FL@' + e.dosFL + 'Hz (amp=' + redondear_(a2FL, 3) + ').');
   }
-  if (a1 > 3 * ctx.ruido && (bandaSup > 3 * ctx.ruido || bandaInf > 3 * ctx.ruido)) {
+  if (a1 > ctx.sig && (bandaSup > ctx.sig || bandaInf > ctx.sig)) {
     subtipo = 'Barras de rotor rotas (bandas pole-pass a ±' + e.polePass + 'Hz de 1X)';
     conf = Math.max(conf, 70);
     evid.push('Bandas laterales pole-pass alrededor de 1X.');
   }
-  if (a3FL > 3 * ctx.ruido || a6FL > 3 * ctx.ruido) {
+  if (a3FL > ctx.sig || a6FL > ctx.sig) {
     subtipo = 'Defecto de SCR (3×/6× FL) — accionamiento DC';
     conf = Math.max(conf, 60);
     evid.push('Componentes a 3·FL/6·FL (' + e.scr3X + '/' + e.scr6X + ' Hz).');

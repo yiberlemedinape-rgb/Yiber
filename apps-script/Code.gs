@@ -42,9 +42,12 @@ function include(nombre) {
 function apiConfig() {
   return {
     montaje: MONTAJE_SENSORES,
+    montajeTransmision: MONTAJE_TRANSMISION,
     requisitos: MONTAJE_REQUISITOS,
     criterios: CRITERIOS_TOMA,
     rodamientos: Object.keys(RODAMIENTOS_REF),
+    rodamientosDef: RODAMIENTOS_REF,   // coeficientes/geometría para el cliente (marcas ±10%)
+    tolerancia: TOLERANCIA,
     umbrales: {
       velocidad: UMBRALES_VELOCIDAD_RMS,
       gSE: UMBRALES_GSE,

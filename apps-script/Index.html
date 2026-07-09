@@ -169,6 +169,42 @@
       <div id="resImport" class="hidden" style="margin-top:16px"></div>
     </div>
 
+    <!-- ============ ANÁLISIS DE DATOS BRUTOS (VES004) ============ -->
+    <div class="card full" style="border-left:4px solid var(--kaeser)">
+      <h2>⚡ Análisis de datos brutos VES004 — clasificado por transmisión</h2>
+      <p class="muted">Carga los 4 CSV de <b>datos brutos</b> (forma de onda en mg). El procesamiento
+        (FFT, integración a velocidad, valores globales, gráficos) ocurre aquí en tu navegador.</p>
+
+      <div class="row3">
+        <div><label>Tipo de transmisión</label>
+          <select id="rawTrans">
+            <option value="correa">Por correa</option>
+            <option value="directo">Directa (acople)</option>
+            <option value="engranaje">Engranaje (fase posterior)</option>
+          </select></div>
+        <div><label>Equipo (hoja del Sheets)</label>
+          <select id="rawEquipo"><option value="">(manual)</option></select></div>
+        <div><label>RPM motor</label><input id="rawRpm" type="number" placeholder="3565"></div>
+      </div>
+
+      <div class="row3" id="rawPoleas">
+        <div><label>Polea motor (mm)</label><input id="rawPoleaMotor" type="number" step="any"></div>
+        <div><label>Polea unidad (mm)</label><input id="rawPoleaUnidad" type="number" step="any"></div>
+        <div><label>&nbsp;</label><button class="sec" style="margin-top:0" onclick="rawActualizarSheets()">Actualizar RPM/poleas en el Sheets</button></div>
+      </div>
+
+      <div class="row3">
+        <div><label>Frecuencia de muestreo fs (Hz) — vacío = autodetectar</label>
+          <input id="rawFs" type="number" placeholder="auto"></div>
+        <div><label>Lóbulos (pasos de presión)</label><input id="rawLobulos" type="number" placeholder="5"></div>
+        <div><label style="margin-top:22px"><input type="checkbox" id="rawGuardar" style="width:auto"> Guardar diagnóstico en la hoja</label></div>
+      </div>
+
+      <div id="rawSensores"></div>
+      <button id="btnRaw" onclick="rawAnalizar()">Procesar y diagnosticar (FFT + espectros + onda circular)</button>
+      <div id="rawOut" style="margin-top:14px"></div>
+    </div>
+
     <!-- ================== MONTAJE ================== -->
     <div class="card full">
       <h2>Guía de montaje de sensores (según familia)</h2>
@@ -176,6 +212,7 @@
     </div>
   </div>
 
+  <?!= include('Dsp'); ?>
   <script>
     var CONFIG = null;
     var EQUIPO = null;   // equipo resuelto desde la BD (o null en modo manual)
@@ -470,6 +507,209 @@
       });
       cont.innerHTML = html;
     }
+
+    /* ============ ANÁLISIS DE DATOS BRUTOS (VES004) ============ */
+
+    var RAWEQ = { correa: [], directo: [], engranaje: [] };
+
+    // Cargar listas de equipos de las 3 hojas de transmisión.
+    google.script.run.withSuccessHandler(function (r) {
+      if (!r) return;
+      RAWEQ = r;
+      rawPintarEquipos();
+      if (r.avisos && r.avisos.length) console.log('Avisos hojas transmisión:', r.avisos.join(' | '));
+    }).apiEquiposTransmision();
+
+    document.getElementById('rawTrans').onchange = function () {
+      rawPintarEquipos(); rawPintarSensores();
+      document.getElementById('rawPoleas').style.display =
+        (this.value === 'correa') ? '' : 'none';
+    };
+    document.getElementById('rawEquipo').onchange = rawPrecargarEquipo;
+
+    function rawPintarEquipos() {
+      var tipo = document.getElementById('rawTrans').value;
+      var sel = document.getElementById('rawEquipo');
+      sel.innerHTML = '<option value="">(manual)</option>';
+      (RAWEQ[tipo] || []).forEach(function (e, i) {
+        var o = document.createElement('option');
+        o.value = i; o.textContent = e.referencia + (e.unidad ? ' — ' + e.unidad : '');
+        sel.appendChild(o);
+      });
+    }
+
+    function rawPrecargarEquipo() {
+      var tipo = document.getElementById('rawTrans').value;
+      var i = document.getElementById('rawEquipo').value;
+      if (i === '') return;
+      var e = (RAWEQ[tipo] || [])[Number(i)];
+      if (!e) return;
+      if (e.rpm) document.getElementById('rawRpm').value = e.rpm;
+      if (e.poleaMotor) document.getElementById('rawPoleaMotor').value = e.poleaMotor;
+      if (e.poleaUnidad) document.getElementById('rawPoleaUnidad').value = e.poleaUnidad;
+      if (e.lobulos) document.getElementById('rawLobulos').value = e.lobulos;
+      rawPintarSensores(e);
+    }
+
+    function rawPintarSensores(eq) {
+      if (!CONFIG) return;
+      var tipo = document.getElementById('rawTrans').value;
+      var lay = CONFIG.montajeTransmision[tipo];
+      var rodDefecto = (eq && eq.rodamientos) || '';
+      document.getElementById('rawSensores').innerHTML = lay.sensores.map(function (s) {
+        var esAirend = s.grupo === 'airend';
+        return '<div class="montaje" style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">' +
+          '<b>S' + s.n + '</b> — ' + s.pos + ' <span class="badge">' + s.grupo + '</span>' +
+          '<div class="row3" style="margin-top:6px">' +
+          '<div><label>CSV datos brutos</label><input type="file" id="raw_f' + s.n + '" accept=".csv,.txt"></div>' +
+          '<div><label>Rodamiento(s) — coma para varios</label>' +
+          '<input id="raw_rod' + s.n + '" placeholder="NU206E,NA4904" value="' + (esAirend ? rodDefecto : '') + '"></div>' +
+          '<div><label>RPM de este punto (vacío = auto)</label><input id="raw_rpm' + s.n + '" type="number"></div>' +
+          '</div></div>';
+      }).join('');
+    }
+
+    function rawActualizarSheets() {
+      var tipo = document.getElementById('rawTrans').value;
+      if (tipo !== 'correa') { alert('La actualización de poleas aplica a transmisión por correa.'); return; }
+      var i = document.getElementById('rawEquipo').value;
+      if (i === '') { alert('Selecciona un equipo de la hoja "Transmisión Por Correa".'); return; }
+      var e = RAWEQ.correa[Number(i)];
+      google.script.run.withSuccessHandler(function (r) {
+        alert(r.mensaje);
+        if (r.ok) google.script.run.withSuccessHandler(function (x) { RAWEQ = x; }).apiEquiposTransmision();
+      }).apiActualizarCorrea({
+        filaHoja: e.filaHoja,
+        rpm: parseFloat(document.getElementById('rawRpm').value),
+        poleaMotor: parseFloat(document.getElementById('rawPoleaMotor').value),
+        poleaUnidad: parseFloat(document.getElementById('rawPoleaUnidad').value)
+      });
+    }
+
+    /** fr del punto según grupo y transmisión (correa multiplica el airend). */
+    function rawFrDe(sensorDef) {
+      var rpmMotor = parseFloat(document.getElementById('rawRpm').value) || 0;
+      var over = parseFloat(document.getElementById('raw_rpm' + sensorDef.n).value);
+      if (isFinite(over) && over > 0) return over / 60;
+      if (!rpmMotor) return 0;
+      var tipo = document.getElementById('rawTrans').value;
+      if (sensorDef.grupo === 'airend' && tipo === 'correa') {
+        var pm = parseFloat(document.getElementById('rawPoleaMotor').value) || 0;
+        var pu = parseFloat(document.getElementById('rawPoleaUnidad').value) || 0;
+        if (pm > 0 && pu > 0) return (rpmMotor / 60) * (pm / pu);
+      }
+      return rpmMotor / 60;   // directa/ventilador/motor: velocidad del motor
+    }
+
+    function rawAnalizar() {
+      var tipo = document.getElementById('rawTrans').value;
+      var lay = CONFIG.montajeTransmision[tipo];
+      var fsManual = parseFloat(document.getElementById('rawFs').value);
+      var lob = parseFloat(document.getElementById('rawLobulos').value) || 0;
+      var out = document.getElementById('rawOut');
+      out.innerHTML = '';
+      var btn = document.getElementById('btnRaw');
+      btn.disabled = true; btn.textContent = 'Procesando…';
+
+      var proms = lay.sensores.map(function (s) {
+        return leerArchivo_('raw_f' + s.n).then(function (txt) { return { def: s, txt: txt }; });
+      });
+      Promise.all(proms).then(function (items) {
+        var alguno = false;
+        items.forEach(function (it) {
+          if (!it.txt) return;
+          alguno = true;
+          try { rawProcesarSensor(it.def, it.txt, fsManual, lob, tipo); }
+          catch (err) {
+            out.innerHTML += '<div class="nota">⚠️ S' + it.def.n + ': ' + err.message + '</div>';
+          }
+        });
+        if (!alguno) out.innerHTML = '<p class="muted">Carga al menos un CSV de datos brutos.</p>';
+        btn.disabled = false; btn.textContent = 'Procesar y diagnosticar (FFT + espectros + onda circular)';
+      });
+    }
+
+    function rawProcesarSensor(def, txt, fsManual, lob, tipo) {
+      var out = document.getElementById('rawOut');
+      var raw = DSP.parseRaw(txt);
+      var fs = (isFinite(fsManual) && fsManual > 0) ? fsManual : raw.fsDetectada;
+      if (!fs) throw new Error('No pude detectar fs (no hay columna de tiempo). Ingresa fs manualmente.');
+      if (raw.nLineas < 4096) throw new Error('Muy pocas muestras (' + raw.nLineas + '). Verifica el export de datos brutos.');
+
+      var fr = rawFrDe(def);
+      var esp = DSP.espectroWelch(raw.senal, fs, 65536);
+      var vel = DSP.espectroVelocidad(esp);
+      var aRMS = DSP.aRMSg(raw.senal);
+      var vRMS = DSP.overallBanda(vel, 10, 1000);
+      var bandas = fr ? DSP.energiaBandas(vel, fr) : null;
+
+      // Rodamientos → frecuencias para marcas ±10% y para el motor de reglas.
+      var refs = (document.getElementById('raw_rod' + def.n).value || '')
+        .split(',').map(function (x) { return x.trim(); }).filter(String);
+      var marcas = refs.map(function (ref) {
+        var d = CONFIG.rodamientosDef[ref.toUpperCase()] || CONFIG.rodamientosDef[ref];
+        return { ref: ref, frec: d && fr ? DSP.frecRodamiento(d, fr) : null };
+      });
+
+      // ---- Render del bloque del sensor ----
+      var id = 'rawS' + def.n;
+      var fMaxVel = Math.min(1000, fs / 2 * 0.9);
+      out.innerHTML +=
+        '<div class="hallazgo" style="margin-top:12px" id="' + id + '">' +
+        '<h3>S' + def.n + ' — ' + def.pos + ' <span class="badge">' + raw.nLineas.toLocaleString() +
+        ' muestras · fs ' + fs + ' Hz</span></h3>' +
+        '<p class="muted">a-RMS <b>' + aRMS.toFixed(4) + ' g</b> · v-RMS(10–1000 Hz) <b>' + vRMS.toFixed(3) +
+        ' mm/s</b> · fr ' + (fr ? fr.toFixed(2) + ' Hz' : '—') +
+        (bandas ? ' · energía: sub ' + bandas.sub + '% · 1–3X ' + bandas.sinc + '% · 3–10X ' + bandas.media + '% · HF ' + bandas.alta + '%' : '') +
+        '</p>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+        '<div><canvas id="' + id + 'esp" width="620" height="230" style="max-width:100%"></canvas>' +
+        '<div class="muted" style="font-size:11px">Espectro de velocidad (mm/s RMS) — 1X/2X/3X, PP y fallas ±10%</div></div>' +
+        '<div><canvas id="' + id + 'cir" width="230" height="230"></canvas>' +
+        '<div class="muted" style="font-size:11px">Onda circular (2 rev)</div></div>' +
+        '</div><div id="' + id + 'diag" class="muted">Diagnosticando…</div></div>';
+
+      DSP.dibujarEspectro(document.getElementById(id + 'esp'), vel, fMaxVel, 'mm/s',
+        { fr: fr, lobulos: (def.grupo === 'airend' ? lob : 0), rodamientos: marcas, tolRod: CONFIG.tolerancia.fraccionRodamiento });
+      DSP.dibujarCircular(document.getElementById(id + 'cir'), raw.senal, fs, fr, 2);
+
+      // ---- Diagnóstico en servidor con los picos extraídos ----
+      var payload = {
+        rpm: fr ? fr * 60 : undefined,
+        espectro: DSP.picos(vel, 300, 2, fMaxVel),
+        espectroTexto: '',
+        rodamiento: refs.join(',') || undefined,
+        global: { vRMS: vRMS, aRMS: aRMS },
+        guardar: document.getElementById('rawGuardar').checked,
+        etiqueta: (document.getElementById('rawEquipo').selectedOptions[0] || {}).textContent || 'manual',
+        sensor: 'S' + def.n
+      };
+      payload.espectroAccel = DSP.picos(esp, 300, 2, Math.min(10000, fs / 2 * 0.9));
+      if (def.grupo === 'airend' && lob) payload.alabes = { n: lob };
+
+      google.script.run.withSuccessHandler(function (r) {
+        var d = document.getElementById(id + 'diag');
+        var color = r.semaforo === 'ROJO' ? 'rojo' : r.semaforo === 'AMARILLO' ? 'amarillo' : 'verde';
+        var html = '<div style="margin-top:6px"><span class="badge" style="background:var(--' + color + ');color:#fff">' +
+          r.semaforo + '</span> ' + r.resumen + '</div>';
+        (r.hallazgos || []).forEach(function (h) {
+          html += '<div class="hallazgo ' + h.severidad + '" style="margin-top:6px"><h3>' + h.tipo +
+            (h.subtipo ? ' — ' + h.subtipo : '') + '<span class="badge">' + h.confianza + '%</span></h3>' +
+            '<ul>' + h.evidencia.map(function (e) { return '<li>' + e + '</li>'; }).join('') + '</ul>' +
+            '<div class="accion"><b>Acción:</b> ' + h.accion + '</div></div>';
+        });
+        d.innerHTML = html; d.classList.remove('muted');
+      }).withFailureHandler(function (e) {
+        document.getElementById(id + 'diag').innerHTML = 'Error en diagnóstico: ' + e.message;
+      }).apiDiagnosticar(payload);
+    }
+
+    // Estado inicial del panel raw cuando cargue CONFIG.
+    var rawInitInterval = setInterval(function () {
+      if (!CONFIG) return;
+      clearInterval(rawInitInterval);
+      rawPintarSensores();
+    }, 300);
   </script>
 </body>
 </html>

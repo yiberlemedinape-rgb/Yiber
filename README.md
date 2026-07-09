@@ -9,6 +9,12 @@ El motor de diagnóstico aplica la **Carta de Charlotte** (Technical Associates
 of Charlotte) cruzada con la instrucción de montaje Kaeser
 **MA 00-21-02.2** y las convenciones de exportación del VES004.
 
+**Flujo principal (datos brutos):** el usuario carga los CSV de **datos brutos**
+del VES004 (forma de onda en mg) y el navegador hace todo el procesamiento —
+FFT, integración a velocidad, valores globales, espectro con marcas
+1X/2X/3X/PP/fallas ±10% y onda circular — antes de pasar los picos al motor
+de reglas en el servidor (ver §7 Metodología).
+
 ---
 
 ## 1. Cómo funciona el proceso VES004 (contexto)
@@ -266,3 +272,99 @@ o *estimado del espectro*. Archivos de ejemplo:
   vuelve trivial.
 - Pendiente sugerido: gráficos de tendencia por equipo/sensor a partir del
   histórico acumulado en `Espectros`/`Diagnostico`.
+
+---
+
+## 7. Metodología interna de diagnóstico (criterios de experto)
+
+Criterios integrados en el motor, basados en la Carta de Charlotte, ISO
+10816/20816 y práctica de campo de analistas de vibraciones:
+
+### 7.1 Adquisición y control de calidad de la señal
+- **Datos brutos**: mín. 4·10⁶ muestras/sensor (MA 00-21-02.2 §7.2). El
+  procesador rechaza archivos con < 4096 muestras y detecta la **"franja
+  recta"** (amplitud casi constante = cable/ajuste/posición del sensor).
+- **fs**: se autodetecta de la columna de tiempo (mediana de Δt, con
+  reconocimiento s/ms); si el export no trae tiempo, se ingresa manual.
+- La forma de onda se procesa con **media removida** (sin DC).
+
+### 7.2 Procesamiento espectral (cliente, en el navegador)
+- **Welch**: segmentos de 65 536 puntos, solape 50%, hasta 16 promedios —
+  reduce la varianza del espectro sin perder resolución (df ≈ fs/65536).
+- **Ventana Hanning** con corrección de ganancia coherente (CG = 0.5) y de
+  energía (NG = 0.375).
+- **Amplitud de picos por energía local** (Parseval sobre ±3 bins): elimina la
+  pérdida por *scalloping*; el RMS del tono es exacto aunque no caiga centrado
+  en un bin (validado contra señales sintéticas: error < 0.1%).
+- **Integración a velocidad en frecuencia**: V(f) = A(f)/(2πf), descartando
+  f < 2 Hz (ruido de integración). v-RMS global por Parseval en banda
+  **10–1000 Hz** (ISO 20816); a-RMS global en g desde la forma de onda.
+
+### 7.3 Criterios de emparejamiento de frecuencias
+- **Órdenes (1X, 2X, 3X…)**: tolerancia estrecha ±3% (la RPM es conocida).
+- **Rodamientos (BPFI/BPFO/BSF/FTF)**: tolerancia **±10%** (criterio Kaeser
+  Colombia) — el deslizamiento y la carga real desplazan las frecuencias
+  respecto del coeficiente nominal del fabricante.
+- **Exclusión de síncronos**: un pico que cae en un armónico entero de fr
+  (1X…12X — incluye pasos de presión y GMF) **no** se acepta como defecto de
+  rodamiento aunque entre en la ventana ±10%; la búsqueda toma el mayor pico
+  **no-síncrono** de la banda, de modo que un paso de presión grande no
+  enmascara un BPFO real vecino (criterio |orden − entero| < 0.03).
+- **Significancia**: un pico solo cuenta si supera 3× el piso de ruido
+  (percentil 25) **y** el 2% del pico dominante — evita falsos positivos por
+  micro-picos.
+- **Relevancia de órdenes**: desequilibrio/desalineación solo se reportan si
+  la amplitud alcanza ≥25% del límite de aviso de la posición (un 1X limpio
+  siempre existe; lo que diagnostica es su magnitud).
+
+### 7.4 Interpretación por bandas de energía (velocidad)
+| Banda | Contenido típico |
+|---|---|
+| Sub-síncrona (<0.8X) | Correas, remolino de aceite, holgura severa |
+| Síncrona (0.8–3.5X) | Desequilibrio, desalineación, holgura A/B |
+| Media (3.5–10X) | Holgura C, PP, álabes, armónicos de engrane |
+| Alta (>10X) | Rodamientos, GMF, cavitación ("grava") |
+
+El reporte muestra el % de energía por banda como apoyo a la interpretación.
+
+### 7.5 Estadificación de rodamientos (Carta de Charlotte)
+1. **Etapa 1**: solo elevación ultrasónica (gSE/HFD); sin líneas discretas.
+   → Vigilar, revisar lubricación.
+2. **Etapa 2**: frecuencias de defecto visibles en **aceleración (mg)**, aún
+   no en velocidad. → Programar reemplazo, acortar intervalo de monitoreo.
+3. **Etapa 3**: defectos visibles en **velocidad (mm/s)** con armónicos/bandas
+   laterales, o gSE sobre el condenatorio. → **Reemplazar de inmediato.**
+4. **Etapa 4**: piso de ruido de banda ancha, líneas discretas desaparecen.
+   → Riesgo de falla catastrófica inminente.
+
+### 7.6 Semáforo (límites por posición)
+- **Verde**: bajo el nivel de aviso.
+- **Amarillo (aviso)**: v-RMS o a-RMS ≥ aviso — planificar intervención.
+- **Rojo (condenatorio)**: v-RMS/a-RMS/gSE ≥ condenatorio, o rodamiento en
+  Etapa 3+. Los límites viven POR POSICIÓN en la BD; defaults ISO 10816-3.
+
+### 7.7 Onda circular
+La forma de onda se envuelve sobre la revolución del eje (θ = ángulo del eje,
+r = amplitud). Impactos una-vez-por-vuelta (rodamiento, diente dañado) caen
+siempre en el mismo ángulo; la modulación visible ubica la falla en la
+revolución. Se dibujan 2 revoluciones por defecto.
+
+---
+
+## 8. Flujo de datos brutos por transmisión (interfaz web)
+
+1. Selecciona **tipo de transmisión** — el panel se conecta dinámicamente a las
+   hojas *"Transmisión Por Correa"*, *"Transmisión Directo"* y *"Transmisión
+   Engranaje"* del archivo (lectura tolerante por encabezados).
+2. Selecciona el **equipo** → precarga RPM, poleas, rodamientos y lóbulos.
+3. **Correa**: ingresa RPM y diámetros de polea; *Actualizar en el Sheets*
+   escribe los valores en la hoja para que sus fórmulas recalculen las
+   frecuencias de falla. La velocidad de la unidad = RPM·(polea motor/polea
+   unidad).
+4. Carga los **4 CSV de datos brutos**:
+   - Correa: 2 del motor (polea/libre) + 2 de la unidad (admisión/compresión).
+   - Directa: ventilador + motor principal + unidad admisión + unidad compresión.
+5. **Procesar** → por sensor: valores globales, % de energía por banda,
+   espectro de velocidad con marcas (1X/2X/3X azul, PP verde, fallas de
+   rodamiento en franjas rojas ±10%), onda circular, y el diagnóstico del
+   motor de reglas con semáforo y acciones.

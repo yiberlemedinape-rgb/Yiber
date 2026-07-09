@@ -210,8 +210,48 @@ function gradosARad_(g) { return g * Math.PI / 180; }
  * Tolerancia de emparejamiento de picos: cuánto puede desviarse un pico medido
  * respecto de una frecuencia objetivo para considerarlo "el mismo".
  * Se usa la mayor entre un % del objetivo y un % de la frecuencia de giro.
+ *
+ * Metodología: para ÓRDENES (1X, 2X...) la tolerancia es estrecha (3%) porque
+ * la RPM se conoce; para RODAMIENTOS es ±10% (criterio del equipo Kaeser
+ * Colombia): los coeficientes del fabricante asumen contacto nominal y el
+ * deslizamiento/carga real desplaza las frecuencias.
  */
 var TOLERANCIA = {
-  fraccionObjetivo: 0.03,  // ±3% de la frecuencia objetivo
-  fraccionGiroMin: 0.05    // o ±5% de fr, lo que sea mayor
+  fraccionObjetivo: 0.03,   // ±3% de la frecuencia objetivo (órdenes)
+  fraccionGiroMin: 0.05,    // o ±5% de fr, lo que sea mayor
+  fraccionRodamiento: 0.10  // ±10% en frecuencias de defecto de rodamiento
+};
+
+/**
+ * Distribución de sensores según el TIPO DE TRANSMISIÓN (flujo de datos
+ * brutos, alcance fase inicial: Correa y Directo).
+ */
+var MONTAJE_TRANSMISION = {
+  correa: {
+    etiqueta: 'Transmisión por correa (SK, SM, SX…)',
+    sensores: [
+      { n: 1, pos: 'Motor principal — lado polea (DE)', grupo: 'motor' },
+      { n: 2, pos: 'Motor principal — lado libre (NDE)', grupo: 'motor' },
+      { n: 3, pos: 'Unidad compresora — lado admisión', grupo: 'airend' },
+      { n: 4, pos: 'Unidad compresora — lado compresión', grupo: 'airend' }
+    ]
+  },
+  directo: {
+    etiqueta: 'Transmisión directa por acople (CSD…HSD)',
+    sensores: [
+      { n: 1, pos: 'Motor ventilador', grupo: 'ventilador' },
+      { n: 2, pos: 'Motor principal — lado acople', grupo: 'motor' },
+      { n: 3, pos: 'Unidad compresora — admisión', grupo: 'airend' },
+      { n: 4, pos: 'Unidad compresora — compresión', grupo: 'airend' }
+    ]
+  },
+  engranaje: {
+    etiqueta: 'Transmisión por engranaje (CSG/DSG/FSG) — fase posterior',
+    sensores: [
+      { n: 1, pos: 'Etapa 1 — extremo no impulsor', grupo: 'airend' },
+      { n: 2, pos: 'Etapa 2 — extremo no impulsor', grupo: 'airend' },
+      { n: 3, pos: 'Gear Box', grupo: 'gearbox' },
+      { n: 4, pos: 'Motor lado DE', grupo: 'motor' }
+    ]
+  }
 };
