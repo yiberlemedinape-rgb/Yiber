@@ -713,7 +713,7 @@
       out.innerHTML +=
         '<div class="hallazgo" style="margin-top:12px" id="' + id + '">' +
         '<h3>S' + def.n + ' — ' + def.pos + ' <span class="badge">' + raw.nLineas.toLocaleString() +
-        ' muestras · fs ' + fs + ' Hz</span></h3>' +
+        ' muestras · fs ' + fs + ' Hz · ' + raw.unidad + '</span></h3>' +
         '<p class="muted">a-RMS <b>' + aRMS.toFixed(4) + ' g</b> · v-RMS(10–1000 Hz) <b>' + vRMS.toFixed(3) +
         ' mm/s</b> · fr ' + (fr ? fr.toFixed(2) + ' Hz' : '—') +
         (bandas ? ' · energía: sub ' + bandas.sub + '% · 1–3X ' + bandas.sinc + '% · 3–10X ' + bandas.media + '% · HF ' + bandas.alta + '%' : '') +

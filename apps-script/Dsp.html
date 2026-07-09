@@ -24,46 +24,115 @@ var DSP = (function () {
   /* ========================= PARSER DE RAW ========================= */
 
   /**
-   * Parsea un CSV de datos brutos. Acepta:
-   *  - 2+ columnas numéricas: [tiempo, amplitud] (tiempo en s o ms)
-   *  - 1 columna numérica: amplitud pura (requiere fs manual)
-   * Devuelve { senal: Float64Array, fsDetectada: number|null, nLineas }
+   * Parsea un CSV de datos brutos del VES004.
+   *
+   * FORMATO REAL (export de IFM, verificado con archivos de campo):
+   *   Unit;SampleRate;Value
+   *   m/s²;50000;-11,634944        ← separador ';', coma decimal, ISO-8859
+   * La fs viene EMBEBIDA en la columna SampleRate y la unidad en Unit
+   * (m/s² | mg | g). La señal se convierte internamente a mg.
+   *
+   * También acepta formatos genéricos: [tiempo, amplitud] (fs por mediana de
+   * Δt, con reconocimiento s/ms) o una sola columna (fs manual).
+   *
+   * @return { senal: Float64Array (mg), fsDetectada, unidad, nLineas }
    */
   function parseRaw(texto) {
     var lineas = String(texto || '').split(/\r?\n/);
-    var t = [], a = [], unaCol = [];
-    for (var i = 0; i < lineas.length; i++) {
-      var L = lineas[i]; if (!L || !L.trim()) continue;
-      var campos = L.split(/[;\t]+|,(?=\s*-?\d)/); // ; tab o coma-separador
-      var nums = [];
-      for (var j = 0; j < campos.length && nums.length < 2; j++) {
-        var s = campos[j].trim();
-        if (/^-?\d+,\d+$/.test(s)) s = s.replace(',', '.');
-        var v = parseFloat(s);
-        if (isFinite(v)) nums.push(v);
+
+    // --- 1) ¿Encabezado tipo IFM (Unit;SampleRate;Value)? ---
+    var sep = null, iniciar = 0, fsCol = -1, valCol = -1, uCol = -1, unidad = '';
+    for (var h = 0; h < Math.min(5, lineas.length); h++) {
+      var Lh = lineas[h]; if (!Lh || !Lh.trim()) continue;
+      var low = Lh.toLowerCase();
+      if (/unit|samplerate|sample_rate|value|valor/.test(low)) {
+        sep = Lh.indexOf(';') >= 0 ? ';' : (Lh.indexOf('\t') >= 0 ? '\t' : ',');
+        var cols = low.split(sep).map(function (s) { return s.trim(); });
+        for (var c = 0; c < cols.length; c++) {
+          if (fsCol < 0 && /samplerate|sample_rate|^fs$/.test(cols[c])) fsCol = c;
+          if (valCol < 0 && /value|valor|amplitud/.test(cols[c])) valCol = c;
+          if (uCol < 0 && /unit|unidad/.test(cols[c])) uCol = c;
+        }
+        iniciar = h + 1;
+        break;
       }
-      if (nums.length >= 2) { t.push(nums[0]); a.push(nums[1]); }
-      else if (nums.length === 1) unaCol.push(nums[0]);
+      break; // la primera línea no vacía no es encabezado reconocible
     }
-    var fs = null, senal;
-    if (a.length > unaCol.length && a.length > 16) {
-      senal = Float64Array.from(a);
-      // fs desde la mediana de dt; autodetecta ms vs s.
-      var dts = [];
-      for (var k = 1; k < Math.min(t.length, 2000); k++) {
-        var d = t[k] - t[k - 1]; if (d > 0) dts.push(d);
+
+    var fs = null, senal, n = 0;
+
+    if (sep !== null && valCol >= 0) {
+      // --- Formato IFM con encabezado ---
+      senal = new Float64Array(lineas.length - iniciar);
+      for (var i = iniciar; i < lineas.length; i++) {
+        var L = lineas[i]; if (!L) continue;
+        var partes = L.split(sep);
+        if (partes.length <= valCol) continue;
+        if (!fs && fsCol >= 0) { var f0 = parseFloat(partes[fsCol]); if (isFinite(f0) && f0 > 0) fs = f0; }
+        if (!unidad && uCol >= 0) unidad = String(partes[uCol] || '').trim();
+        var v = parseFloat(String(partes[valCol]).replace(',', '.'));
+        if (isFinite(v)) senal[n++] = v;
       }
-      if (dts.length) {
-        dts.sort(function (x, y) { return x - y; });
-        var dt = dts[Math.floor(dts.length / 2)];
-        fs = 1 / dt;
-        if (fs < 20) fs = 1000 / dt;        // tiempo probablemente en ms
-        if (fs < 20) fs = null;             // no confiable
-      }
+      senal = senal.subarray(0, n);
     } else {
-      senal = Float64Array.from(unaCol.length >= a.length ? unaCol : a);
+      // --- Formatos genéricos: [t, amp] o columna única ---
+      var t = [], a = [], unaCol = [];
+      for (var g = iniciar; g < lineas.length; g++) {
+        var Lg = lineas[g]; if (!Lg || !Lg.trim()) continue;
+        // separador: ';'/tab; coma solo si hay ≥2 (si hay una sola, es decimal)
+        var campos;
+        if (/[;\t]/.test(Lg)) campos = Lg.split(/[;\t]+/);
+        else if ((Lg.match(/,/g) || []).length >= 2) campos = Lg.split(/,+/);
+        else campos = Lg.split(/\s+/).length > 1 ? Lg.split(/\s+/) : [Lg];
+        var nums = [];
+        for (var j = 0; j < campos.length && nums.length < 2; j++) {
+          var s = campos[j].trim();
+          if (/^-?\d+,\d+$/.test(s)) s = s.replace(',', '.');
+          var vv = parseFloat(s);
+          if (isFinite(vv)) nums.push(vv);
+        }
+        if (nums.length >= 2) { t.push(nums[0]); a.push(nums[1]); }
+        else if (nums.length === 1) unaCol.push(nums[0]);
+      }
+      if (a.length > unaCol.length && a.length > 16) {
+        senal = Float64Array.from(a);
+        // ¿col 1 constante? → es SampleRate embebido; si varía → tiempo.
+        var constante = true;
+        for (var k1 = 1; k1 < Math.min(t.length, 200); k1++) {
+          if (t[k1] !== t[0]) { constante = false; break; }
+        }
+        if (constante && t[0] > 100) fs = t[0];
+        else {
+          var dts = [];
+          for (var k = 1; k < Math.min(t.length, 2000); k++) {
+            var d = t[k] - t[k - 1]; if (d > 0) dts.push(d);
+          }
+          if (dts.length) {
+            dts.sort(function (x, y) { return x - y; });
+            var dt = dts[Math.floor(dts.length / 2)];
+            fs = 1 / dt;
+            if (fs < 20) fs = 1000 / dt;    // tiempo probablemente en ms
+            if (fs < 20) fs = null;
+          }
+        }
+      } else {
+        senal = Float64Array.from(unaCol.length >= a.length ? unaCol : a);
+      }
     }
-    return { senal: senal, fsDetectada: fs ? Math.round(fs) : null, nLineas: senal.length };
+
+    // --- Conversión de unidad a mg (el pipeline trabaja en mg) ---
+    var uNorm = unidad.toLowerCase();
+    var factor = 1;                                     // mg (por defecto)
+    if (/m\/s/.test(uNorm)) factor = 1000 / 9.80665;    // m/s² → mg
+    else if (/^g$/.test(uNorm)) factor = 1000;          // g → mg
+    if (factor !== 1) for (var q = 0; q < senal.length; q++) senal[q] *= factor;
+
+    return {
+      senal: senal,
+      fsDetectada: fs ? Math.round(fs) : null,
+      unidad: unidad || 'mg (asumido)',
+      nLineas: senal.length
+    };
   }
 
   /* ============================== FFT ============================== */

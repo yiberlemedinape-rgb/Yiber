@@ -312,8 +312,14 @@ function reglaRodamientos_(ctx) {
   // posición, en cada mitad del espectro. Aparecen PRIMERO en aceleración (mg)
   // — defecto incipiente — y luego migran al espectro de velocidad (mm/s) al
   // agravarse (Carta de Charlotte).
-  var defVel = [];    // en velocidad → daño avanzado
-  var defAccel = [];  // solo en aceleración → incipiente
+  var defVel = [];      // pista/elemento (BPFO/BPFI/BSF) en velocidad → daño real
+  var defVelFTF = [];   // solo FTF en velocidad → jaula o fuente sub-síncrona
+  var defAccel = [];    // solo en aceleración → incipiente
+  var racesFuertes = 0; // pista/elemento con amplitud significativa
+  // Umbral de "significativo" para condenar: además del umbral de ruido, la
+  // línea de defecto debe alcanzar el 10% del límite de aviso en velocidad.
+  var umbralFuerte = Math.max(ctx.sig, 0.1 * ctx.limites.velAviso);
+
   lista.forEach(function (rod) {
     if (!rod.geo || !ctx.fr) return;
     var frec = frecuenciasRodamiento(rod.geo, ctx.fr);
@@ -324,28 +330,40 @@ function reglaRodamientos_(ctx) {
       var pV = ctx.espectro.length ? picoCercaF_(ctx.espectro, frec[k], ctx.fr, tolRod, true) : { amp: 0, f: 0 };
       var pA = ctx.espectroAccel.length ? picoCercaF_(ctx.espectroAccel, frec[k], ctx.fr, tolRod, true) : { amp: 0, f: 0 };
       if (pV.amp > ctx.sig) {
-        defVel.push(tag + k + '@' + frec[k] + 'Hz vel(' + redondear_(pV.amp, 3) + ' en ' + redondear_(pV.f, 1) + 'Hz)');
+        var txt = tag + k + '@' + frec[k] + 'Hz vel(' + redondear_(pV.amp, 3) + ' en ' + redondear_(pV.f, 1) + 'Hz)';
+        if (k === 'FTF') defVelFTF.push(txt);
+        else { defVel.push(txt); if (pV.amp >= umbralFuerte) racesFuertes++; }
       } else if (pA.amp > ctx.sigAccel) {
         defAccel.push(tag + k + '@' + frec[k] + 'Hz acc(' + redondear_(pA.amp, 3) + ' en ' + redondear_(pA.f, 1) + 'Hz)');
       }
     });
   });
-  var defectos = defVel.concat(defAccel);
+  var defectos = defVel.concat(defVelFTF).concat(defAccel);
 
   if (!energiaAlta && !defectos.length) return null;
 
-  // Estadificación (Carta de Charlotte):
-  var etapa, accion, conf = 55;
-  if (defVel.length && (gSE > UMBRALES_GSE.alarmaMax || defVel.length >= 2)) {
+  // Estadificación (Carta de Charlotte + criterios de campo):
+  //  - Condenar (Etapa 3) exige defecto de PISTA/ELEMENTO significativo en
+  //    velocidad; la FTF sola es señal de jaula O de una fuente sub-síncrona
+  //    externa (ventilador/bomba/correa) transmitida — verificar, no condenar.
+  var etapa, accion, conf = 55, condenatorio = false;
+  if (racesFuertes && (gSE > UMBRALES_GSE.alarmaMax || racesFuertes >= 2)) {
     etapa = 'Etapa 3';
-    accion = 'REEMPLAZAR DE INMEDIATO. Frecuencias de defecto con armónicos/bandas ' +
-             'laterales visibles en el espectro de VELOCIDAD.';
-    conf = 82;
+    accion = 'REEMPLAZAR DE INMEDIATO. Defectos de pista/elemento significativos en el ' +
+             'espectro de VELOCIDAD.';
+    conf = 82; condenatorio = true;
   } else if (defVel.length) {
     etapa = 'Etapa 2–3';
-    accion = 'Programar reemplazo a corto plazo. Defecto ya presente en velocidad; ' +
-             'aumentar la frecuencia de monitoreo.';
+    accion = 'Programar reemplazo a corto plazo. Defecto de pista/elemento ya presente en ' +
+             'velocidad (amplitud aún moderada); aumentar la frecuencia de monitoreo y tendenciar.';
     conf = 74;
+  } else if (defVelFTF.length) {
+    etapa = 'Etapa 2 (jaula / fuente sub-síncrona)';
+    accion = 'Línea(s) en la ventana FTF sin defectos de pista/elemento. Puede ser desgaste ' +
+             'de jaula O una fuente sub-síncrona externa transmitida (ventilador, bomba, ' +
+             'correa). VERIFICAR en campo la velocidad de los auxiliares antes de intervenir; ' +
+             'tendenciar la línea y su tren de armónicos.';
+    conf = 62;
   } else if (defAccel.length) {
     etapa = 'Etapa 2';
     accion = 'Defecto discreto visible en ACELERACIÓN (mg) con bandas laterales, aún no ' +
@@ -355,7 +373,7 @@ function reglaRodamientos_(ctx) {
     etapa = 'Etapa 3–4';
     accion = 'REEMPLAZAR. Energía de pico muy alta sin líneas discretas claras: posible ' +
              'daño avanzado/ruido aleatorio de banda ancha.';
-    conf = 72;
+    conf = 72; condenatorio = true;
   } else {
     etapa = 'Etapa 1';
     accion = 'Vigilar. Elevación ultrasónica (gSE/HFD) sin líneas discretas. Revisar lubricación.';
@@ -365,7 +383,8 @@ function reglaRodamientos_(ctx) {
   var evid = [];
   if (gSE) evid.push('gSE=' + gSE + ' (alarma>' + UMBRALES_GSE.alarmaMax + ')');
   if (HFD) evid.push('HFD=' + HFD + ' g (alarma>' + UMBRALES_HFD.alarmaMax + ')');
-  if (defVel.length) evid.push('Defectos en velocidad: ' + defVel.join(', '));
+  if (defVel.length) evid.push('Pista/elemento en velocidad: ' + defVel.join(', '));
+  if (defVelFTF.length) evid.push('Ventana FTF en velocidad: ' + defVelFTF.join(', '));
   if (defAccel.length) evid.push('Defectos en aceleración: ' + defAccel.join(', '));
   if (!lista.length) evid.push('Sin datos de rodamiento: solo se evalúa energía de pico.');
 
@@ -373,7 +392,8 @@ function reglaRodamientos_(ctx) {
     tipo: 'Rodamiento',
     subtipo: etapa,
     confianza: acotar_(conf),
-    severidad: etapa.indexOf('3') >= 0 || etapa.indexOf('4') >= 0 ? 'ALTA' : (etapa.indexOf('2') >= 0 ? 'MEDIA' : 'BAJA'),
+    severidad: condenatorio ? 'ALTA' : (etapa.indexOf('1') === 6 ? 'BAJA' : 'MEDIA'),
+    condenatorio: condenatorio,
     evidencia: evid,
     accion: accion
   };
@@ -554,10 +574,15 @@ function semaforoGlobal_(global, hallazgos, L) {
   evaluar(Number(g.aRMS), L.acelAviso, L.acelCond, 'a-RMS', ' g');
   evaluar(Number(g.gSE), L.gseAviso, L.gseCond, 'gSE', '');
 
-  // Un rodamiento en Etapa 3+ es condenatorio aunque el global no dispare.
+  // Rodamiento condenatorio (Etapa 3/3–4) fuerza rojo; etapas intermedias
+  // (2, 2–3, jaula) elevan al menos a amarillo.
   hallazgos.forEach(function (h) {
-    if (h.tipo === 'Rodamiento' && /3|4/.test(h.subtipo)) {
+    if (h.tipo !== 'Rodamiento') return;
+    if (h.condenatorio) {
       color = peorColor_(color, 'ROJO');
+      motivos.push('rodamiento ' + h.subtipo);
+    } else if (h.subtipo.indexOf('Etapa 2') === 0) {
+      color = peorColor_(color, 'AMARILLO');
       motivos.push('rodamiento ' + h.subtipo);
     }
   });
