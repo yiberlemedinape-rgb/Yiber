@@ -355,8 +355,18 @@ revolución. Se dibujan 2 revoluciones por defecto.
 
 1. Selecciona **tipo de transmisión** — el panel se conecta dinámicamente a las
    hojas *"Transmisión Por Correa"*, *"Transmisión Directo"* y *"Transmisión
-   Engranaje"* del archivo (lectura tolerante por encabezados).
-2. Selecciona el **equipo** → precarga RPM, poleas, rodamientos y lóbulos.
+   Engranaje"* del archivo (lectura tolerante por encabezados). El lector
+   entiende la estructura real de **bloques multi-fila** (celdas combinadas):
+   cada equipo con su tabla de rodamientos (Ubicación, Designation,
+   BPFI/BPFO/BSF en órdenes, #ElemRod).
+2. Selecciona el **equipo** → precarga RPM, poleas y lóbulos (derivados de los
+   pasos de presión de la hoja), y **asigna los rodamientos a los sensores por
+   su "Ubicación"**: Admisión→S3, Compresión→S4, Motor Delantera→S1 (correa),
+   Motor Trasera→S2; en Directa ambos rodamientos de motor van a S2 (S1 es el
+   ventilador). Los rodamientos de la **hembra** giran a fr/relación (columna
+   "Velocidad del Rotor Macho", 1.2 = 6/5 lóbulos) y sus frecuencias de falla
+   se calculan a SU velocidad — mejora sobre las columnas precalculadas de la
+   hoja, que usan el 1X del motor para todas las filas.
 3. **Correa**: ingresa RPM y diámetros de polea; *Actualizar en el Sheets*
    escribe los valores en la hoja para que sus fórmulas recalculen las
    frecuencias de falla. La velocidad de la unidad = RPM·(polea motor/polea

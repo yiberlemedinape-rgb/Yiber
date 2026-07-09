@@ -521,6 +521,7 @@
     }).apiEquiposTransmision();
 
     document.getElementById('rawTrans').onchange = function () {
+      RAWSEL = null;
       rawPintarEquipos(); rawPintarSensores();
       document.getElementById('rawPoleas').style.display =
         (this.value === 'correa') ? '' : 'none';
@@ -538,32 +539,69 @@
       });
     }
 
+    var RAWSEL = null;   // bloque de equipo seleccionado (con sus rodamientos)
+
     function rawPrecargarEquipo() {
       var tipo = document.getElementById('rawTrans').value;
       var i = document.getElementById('rawEquipo').value;
-      if (i === '') return;
+      if (i === '') { RAWSEL = null; rawPintarSensores(); return; }
       var e = (RAWEQ[tipo] || [])[Number(i)];
       if (!e) return;
+      RAWSEL = e;
       if (e.rpm) document.getElementById('rawRpm').value = e.rpm;
       if (e.poleaMotor) document.getElementById('rawPoleaMotor').value = e.poleaMotor;
       if (e.poleaUnidad) document.getElementById('rawPoleaUnidad').value = e.poleaUnidad;
-      if (e.lobulos) document.getElementById('rawLobulos').value = e.lobulos;
-      rawPintarSensores(e);
+      // Lóbulos: derivados de los pasos de presión de la hoja (PP / 1X del rotor).
+      var arm = e.armAdmision || e.armMotor;
+      if (e.pasosPresion && arm) {
+        document.getElementById('rawLobulos').value = Math.round(e.pasosPresion / arm);
+      }
+      rawPintarSensores();
     }
 
-    function rawPintarSensores(eq) {
+    /**
+     * Asignación de rodamientos del bloque a sensores por su "Ubicación":
+     * Admisión→S3 · Compresión→S4 · Motor Delantera→S1 (correa) · Motor
+     * Trasera→S2 · en Directa ambos motores van a S2 (S1 es el ventilador).
+     * Los de la HEMBRA giran a fr/relMacho (factorVel).
+     */
+    function rawAsignarRodamientos(eq, tipo) {
+      var asign = { 1: [], 2: [], 3: [], 4: [] };
+      if (!eq) return asign;
+      var relM = eq.relMacho || 1;
+      (eq.rodamientos || []).forEach(function (rod) {
+        var u = (rod.ubicacion || '').toLowerCase();
+        var esHembra = u.indexOf('hembra') >= 0;
+        var item = {
+          ref: rod.ref + (esHembra ? ' (hembra)' : ''),
+          coefBPFI: rod.coefBPFI, coefBPFO: rod.coefBPFO, coefBSF: rod.coefBSF, Nb: rod.Nb,
+          factorVel: esHembra ? 1 / relM : 1
+        };
+        if (u.indexOf('admisi') >= 0) asign[3].push(item);
+        else if (u.indexOf('compresi') >= 0) asign[4].push(item);
+        else if (u.indexOf('motor') >= 0) {
+          if (tipo === 'correa' && u.indexOf('delanter') >= 0) asign[1].push(item);
+          else asign[2].push(item);
+        }
+      });
+      return asign;
+    }
+
+    function rawPintarSensores() {
       if (!CONFIG) return;
       var tipo = document.getElementById('rawTrans').value;
       var lay = CONFIG.montajeTransmision[tipo];
-      var rodDefecto = (eq && eq.rodamientos) || '';
+      var asign = rawAsignarRodamientos(RAWSEL, tipo);
       document.getElementById('rawSensores').innerHTML = lay.sensores.map(function (s) {
-        var esAirend = s.grupo === 'airend';
+        var auto = (asign[s.n] || []).map(function (r) { return r.ref; }).join(', ');
+        var rodCtl = RAWSEL
+          ? '<span class="muted">' + (auto || '— (sin rodamientos en la hoja)') + '</span>'
+          : '<input id="raw_rod' + s.n + '" placeholder="NU206E,NA4904">';
         return '<div class="montaje" style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">' +
           '<b>S' + s.n + '</b> — ' + s.pos + ' <span class="badge">' + s.grupo + '</span>' +
           '<div class="row3" style="margin-top:6px">' +
           '<div><label>CSV datos brutos</label><input type="file" id="raw_f' + s.n + '" accept=".csv,.txt"></div>' +
-          '<div><label>Rodamiento(s) — coma para varios</label>' +
-          '<input id="raw_rod' + s.n + '" placeholder="NU206E,NA4904" value="' + (esAirend ? rodDefecto : '') + '"></div>' +
+          '<div><label>Rodamientos (de la hoja)</label>' + rodCtl + '</div>' +
           '<div><label>RPM de este punto (vacío = auto)</label><input id="raw_rpm' + s.n + '" type="number"></div>' +
           '</div></div>';
       }).join('');
@@ -644,12 +682,30 @@
       var bandas = fr ? DSP.energiaBandas(vel, fr) : null;
 
       // Rodamientos → frecuencias para marcas ±10% y para el motor de reglas.
-      var refs = (document.getElementById('raw_rod' + def.n).value || '')
-        .split(',').map(function (x) { return x.trim(); }).filter(String);
-      var marcas = refs.map(function (ref) {
-        var d = CONFIG.rodamientosDef[ref.toUpperCase()] || CONFIG.rodamientosDef[ref];
-        return { ref: ref, frec: d && fr ? DSP.frecRodamiento(d, fr) : null };
-      });
+      // Con equipo de la hoja: usa su tabla (coeficientes + factor de velocidad
+      // macho/hembra). Manual: referencias del catálogo.
+      var marcas = [], rodPayload;
+      if (RAWSEL) {
+        var asign = rawAsignarRodamientos(RAWSEL, tipo)[def.n] || [];
+        marcas = asign.map(function (r) {
+          return { ref: r.ref, frec: fr ? DSP.frecRodamiento(r, fr * r.factorVel) : null };
+        });
+        // Para el servidor: coeficientes escalados por factorVel, de modo que
+        // coef_eff × fr_sensor = coef × fr_rotor (hembra gira a fr/relMacho).
+        rodPayload = asign.map(function (r) {
+          return { ref: r.ref, geo: {
+            coefBPFI: r.coefBPFI * r.factorVel, coefBPFO: r.coefBPFO * r.factorVel,
+            coefBSF: r.coefBSF * r.factorVel, Nb: r.Nb } };
+        });
+      } else {
+        var inp = document.getElementById('raw_rod' + def.n);
+        var refs = (inp && inp.value || '').split(',').map(function (x) { return x.trim(); }).filter(String);
+        marcas = refs.map(function (ref) {
+          var d = CONFIG.rodamientosDef[ref.toUpperCase()] || CONFIG.rodamientosDef[ref];
+          return { ref: ref, frec: d && fr ? DSP.frecRodamiento(d, fr) : null };
+        });
+        rodPayload = refs.join(',') || undefined;
+      }
 
       // ---- Render del bloque del sensor ----
       var id = 'rawS' + def.n;
@@ -678,7 +734,7 @@
         rpm: fr ? fr * 60 : undefined,
         espectro: DSP.picos(vel, 300, 2, fMaxVel),
         espectroTexto: '',
-        rodamiento: refs.join(',') || undefined,
+        rodamiento: rodPayload,
         global: { vRMS: vRMS, aRMS: aRMS },
         guardar: document.getElementById('rawGuardar').checked,
         etiqueta: (document.getElementById('rawEquipo').selectedOptions[0] || {}).textContent || 'manual',

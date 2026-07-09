@@ -230,10 +230,10 @@ var MONTAJE_TRANSMISION = {
   correa: {
     etiqueta: 'Transmisión por correa (SK, SM, SX…)',
     sensores: [
-      { n: 1, pos: 'Motor principal — lado polea (DE)', grupo: 'motor' },
-      { n: 2, pos: 'Motor principal — lado libre (NDE)', grupo: 'motor' },
-      { n: 3, pos: 'Unidad compresora — lado admisión', grupo: 'airend' },
-      { n: 4, pos: 'Unidad compresora — lado compresión', grupo: 'airend' }
+      { n: 1, pos: 'Motor principal — parte delantera (lado polea)', grupo: 'motor' },
+      { n: 2, pos: 'Motor principal — parte trasera', grupo: 'motor' },
+      { n: 3, pos: 'Unidad compresora — admisión (macho + hembra)', grupo: 'airend' },
+      { n: 4, pos: 'Unidad compresora — compresión (macho + hembra)', grupo: 'airend' }
     ]
   },
   directo: {
