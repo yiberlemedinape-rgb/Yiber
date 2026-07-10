@@ -199,6 +199,14 @@
         <div><label>Lóbulos (pasos de presión)</label><input id="rawLobulos" type="number" placeholder="5"></div>
         <div><label style="margin-top:22px"><input type="checkbox" id="rawGuardar" style="width:auto"> Guardar diagnóstico en la hoja</label></div>
       </div>
+      <div class="row3">
+        <div><label>RPM ventilador / auxiliar (opcional)</label>
+          <input id="rawRpmAux" type="number" placeholder="1500"></div>
+        <div class="muted" style="grid-column:span 2;align-self:end;font-size:12px">
+          Si conoces la velocidad del ventilador u otro auxiliar, su 1X y armónicos se
+          etiquetan en el espectro y se <b>excluyen</b> del análisis de rodamientos
+          (evita falsos FTF por trenes sub-síncronos transmitidos).</div>
+      </div>
 
       <div id="rawSensores"></div>
       <button id="btnRaw" onclick="rawAnalizar()">Procesar y diagnosticar (FFT + espectros + onda circular)</button>
@@ -725,8 +733,22 @@
         '<div class="muted" style="font-size:11px">Onda circular (2 rev)</div></div>' +
         '</div><div id="' + id + 'diag" class="muted">Diagnosticando…</div></div>';
 
+      // Auxiliar (ventilador): auto-lock del 1X real dentro de ±10% del nominal.
+      var rpmAux = parseFloat(document.getElementById('rawRpmAux').value);
+      var aux = null;
+      if (isFinite(rpmAux) && rpmAux > 0) {
+        var frAuxNom = rpmAux / 60, mejorA = 0, mejorF = frAuxNom;
+        for (var qa = 0; qa < vel.freqs.length; qa++) {
+          if (Math.abs(vel.freqs[qa] - frAuxNom) <= 0.10 * frAuxNom && vel.ampRMS[qa] > mejorA) {
+            mejorA = vel.ampRMS[qa]; mejorF = vel.freqs[qa];
+          }
+        }
+        aux = { fr: mejorF, nombre: 'Ventilador' };
+      }
+
       DSP.dibujarEspectro(document.getElementById(id + 'esp'), vel, fMaxVel, 'mm/s',
-        { fr: fr, lobulos: (def.grupo === 'airend' ? lob : 0), rodamientos: marcas, tolRod: CONFIG.tolerancia.fraccionRodamiento });
+        { fr: fr, lobulos: (def.grupo === 'airend' ? lob : 0), rodamientos: marcas,
+          tolRod: CONFIG.tolerancia.fraccionRodamiento, aux: aux });
       DSP.dibujarCircular(document.getElementById(id + 'cir'), raw.senal, fs, fr, 2);
 
       // ---- Diagnóstico en servidor con los picos extraídos ----
@@ -742,6 +764,7 @@
       };
       payload.espectroAccel = DSP.picos(esp, 300, 2, Math.min(10000, fs / 2 * 0.9));
       if (def.grupo === 'airend' && lob) payload.alabes = { n: lob };
+      if (aux) payload.auxiliares = [{ nombre: aux.nombre, fr: aux.fr }];
 
       google.script.run.withSuccessHandler(function (r) {
         var d = document.getElementById(id + 'diag');

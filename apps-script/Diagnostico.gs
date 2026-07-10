@@ -53,11 +53,28 @@ function diagnosticar(medicion) {
   ctx.sig = Math.max(3 * ctx.ruido, 0.02 * maxAmp_(espectro));
   ctx.sigAccel = Math.max(3 * ctx.ruidoAccel, 0.02 * maxAmp_(espectroAccel));
 
+  // Fuentes AUXILIARES conocidas (p.ej. motor del ventilador): sus armónicos
+  // se etiquetan como tales y se EXCLUYEN del emparejamiento de rodamientos.
+  // La fr nominal se refina contra el espectro (±10%): la placa dice 1500 rpm
+  // pero el eje real puede ir a 1556 (deslizamiento) — auto-lock al pico real.
+  ctx.auxiliares = (m.auxiliares || []).map(function (ax) {
+    var frAux = Number(ax.fr) || (Number(ax.rpm) ? Number(ax.rpm) / 60 : 0);
+    if (!frAux) return null;
+    var pk = espectro.length ? picoCercaF_(espectro, frAux, fr, 0.10) : { amp: 0, f: 0 };
+    return {
+      nombre: ax.nombre || 'Auxiliar',
+      frNominal: frAux,
+      fr: (pk.amp > ctx.sig && pk.f) ? pk.f : frAux,   // auto-lock si hay pico
+      amp: pk.amp
+    };
+  }).filter(function (x) { return x; });
+
   var hallazgos = [];
 
   // Cada regla devuelve null o un hallazgo {tipo, subtipo, confianza(0-100),
   // severidad, evidencia[], accion}.
   [
+    reglaAuxiliar_,
     reglaDesequilibrio_,
     reglaDesalineacion_,
     reglaHolguras_,
@@ -127,10 +144,11 @@ function picoCerca_(espectro, f, fr, tolFrac) {
 }
 
 /** Igual que picoCerca_ pero devuelve también la frecuencia real del pico.
- *  excluirSinc=true: ignora picos síncronos (1X..12X) dentro de la ventana —
- *  así un paso de presión/armónico grande no enmascara un defecto de
- *  rodamiento que convive en la misma banda ±10%. */
-function picoCercaF_(espectro, f, fr, tolFrac, excluirSinc) {
+ *  excluir: true = ignora picos síncronos (1X..12X) dentro de la ventana;
+ *  o una función (fPico)→bool con el criterio de exclusión completo — así un
+ *  paso de presión o un armónico del ventilador no enmascara ni suplanta un
+ *  defecto de rodamiento en la misma banda ±10%. */
+function picoCercaF_(espectro, f, fr, tolFrac, excluir) {
   if (!f || !espectro.length) return { amp: 0, f: 0 };
   var tol = tolFrac
     ? tolFrac * f
@@ -139,10 +157,27 @@ function picoCercaF_(espectro, f, fr, tolFrac, excluirSinc) {
   for (var i = 0; i < espectro.length; i++) {
     var d = Math.abs(espectro[i][0] - f);
     if (d > tol) continue;
-    if (excluirSinc && esSincrono_(espectro[i][0], fr)) continue;
+    if (excluir === true && esSincrono_(espectro[i][0], fr)) continue;
+    if (typeof excluir === 'function' && excluir(espectro[i][0])) continue;
     if (espectro[i][1] > max) { max = espectro[i][1]; fMax = espectro[i][0]; }
   }
   return { amp: max, f: fMax };
+}
+
+/**
+ * ¿El pico pertenece a una fuente AUXILIAR conocida (ventilador, bomba)?
+ * Coincide con n×frAux (n=1..8) dentro de ±2.5% (la fr aux ya viene
+ * auto-lockeada al pico real del espectro).
+ */
+function esAuxiliar_(fPico, auxiliares) {
+  if (!auxiliares || !auxiliares.length || !fPico) return false;
+  for (var i = 0; i < auxiliares.length; i++) {
+    var fa = auxiliares[i].fr;
+    if (!fa) continue;
+    var n = Math.round(fPico / fa);
+    if (n >= 1 && n <= 8 && Math.abs(fPico - n * fa) <= 0.025 * n * fa) return true;
+  }
+  return false;
 }
 
 /**
@@ -192,6 +227,42 @@ function maxAmp_(espectro) {
 function amp_(ctx, n) { return picoCerca_(ctx.espectro, n * ctx.fr, ctx.fr); }
 
 /* ============================= REGLAS ================================= */
+
+/**
+ * Fuente auxiliar conocida (motor del ventilador, bomba…): identifica su 1X
+ * real (auto-lock sobre la nominal) y su tren de armónicos. EXPLICA la energía
+ * sub-síncrona en vez de dejar que dispare falsos FTF/holgura, y alerta si la
+ * amplitud del auxiliar es alta (desequilibrio/holgura del propio auxiliar).
+ */
+function reglaAuxiliar_(ctx) {
+  if (!ctx.auxiliares.length || !ctx.espectro.length) return null;
+  var mejor = null;
+  ctx.auxiliares.forEach(function (ax) {
+    if (!ax.amp || ax.amp <= ctx.sig) return;
+    // tren de armónicos del auxiliar
+    var arms = [];
+    for (var n = 1; n <= 6; n++) {
+      var p = picoCercaF_(ctx.espectro, n * ax.fr, ctx.fr, 0.025);
+      if (p.amp > ctx.sig) arms.push(n + '×@' + redondear_(p.f, 1) + 'Hz(' + redondear_(p.amp, 2) + ')');
+    }
+    var sev = severidadPorOrden_(ax.amp, ctx.limites);
+    var h = {
+      tipo: 'Componente auxiliar',
+      subtipo: ax.nombre + ' @ ' + redondear_(ax.fr, 2) + ' Hz (' + Math.round(ax.fr * 60) + ' rpm' +
+               (Math.abs(ax.fr - ax.frNominal) > 0.02 * ax.frNominal
+                 ? '; nominal ' + Math.round(ax.frNominal * 60) : '') + ')',
+      confianza: acotar_(70 + Math.min(arms.length * 4, 20)),
+      severidad: sev,
+      evidencia: ['Tren del auxiliar: ' + arms.join(', ')],
+      accion: sev === 'BAJA'
+        ? 'Fuente identificada y etiquetada (excluida del análisis de rodamientos). Sin acción.'
+        : 'Amplitud del ' + ax.nombre.toLowerCase() + ' elevada: revisar balanceo, fijación ' +
+          'y rodamientos DEL AUXILIAR. Su tren se excluye del análisis del tren principal.'
+    };
+    if (!mejor || h.confianza > mejor.confianza) mejor = h;
+  });
+  return mejor;
+}
 
 /**
  * Desequilibrio: 1X radial dominante, armónicos superiores bajos.
@@ -273,7 +344,12 @@ function reglaDesalineacion_(ctx) {
  */
 function reglaHolguras_(ctx) {
   if (!ctx.espectro.length || !ctx.fr) return null;
-  var a05 = amp_(ctx, 0.5), a15 = amp_(ctx, 1.5), a25 = amp_(ctx, 2.5);
+  // Sub-armónicos sin contar armónicos de auxiliares (ventilador cerca de
+  // 0.5X dispararía "holgura" falsamente).
+  var exclAux = function (fp) { return esAuxiliar_(fp, ctx.auxiliares); };
+  var a05 = picoCercaF_(ctx.espectro, 0.5 * ctx.fr, ctx.fr, null, exclAux).amp;
+  var a15 = picoCercaF_(ctx.espectro, 1.5 * ctx.fr, ctx.fr, null, exclAux).amp;
+  var a25 = picoCercaF_(ctx.espectro, 2.5 * ctx.fr, ctx.fr, null, exclAux).amp;
   var armonicos = 0;
   for (var n = 1; n <= 6; n++) if (amp_(ctx, n) > ctx.sig) armonicos++;
 
@@ -325,10 +401,12 @@ function reglaRodamientos_(ctx) {
     var frec = frecuenciasRodamiento(rod.geo, ctx.fr);
     var tag = lista.length > 1 ? rod.ref + ' ' : '';
     var tolRod = TOLERANCIA.fraccionRodamiento;   // ±10% (criterio de campo)
+    // Excluir picos síncronos (1X..12X: PP/GMF) Y armónicos de auxiliares
+    // conocidos (ventilador/bomba): ninguno es defecto de rodamiento.
+    var excl = function (fp) { return esSincrono_(fp, ctx.fr) || esAuxiliar_(fp, ctx.auxiliares); };
     ['BPFO', 'BPFI', 'BSF', 'FTF'].forEach(function (k) {
-      // Solo picos NO-síncronos: 1X..12X (incluye PP/GMF) no son rodamiento.
-      var pV = ctx.espectro.length ? picoCercaF_(ctx.espectro, frec[k], ctx.fr, tolRod, true) : { amp: 0, f: 0 };
-      var pA = ctx.espectroAccel.length ? picoCercaF_(ctx.espectroAccel, frec[k], ctx.fr, tolRod, true) : { amp: 0, f: 0 };
+      var pV = ctx.espectro.length ? picoCercaF_(ctx.espectro, frec[k], ctx.fr, tolRod, excl) : { amp: 0, f: 0 };
+      var pA = ctx.espectroAccel.length ? picoCercaF_(ctx.espectroAccel, frec[k], ctx.fr, tolRod, excl) : { amp: 0, f: 0 };
       if (pV.amp > ctx.sig) {
         var txt = tag + k + '@' + frec[k] + 'Hz vel(' + redondear_(pV.amp, 3) + ' en ' + redondear_(pV.f, 1) + 'Hz)';
         if (k === 'FTF') defVelFTF.push(txt);

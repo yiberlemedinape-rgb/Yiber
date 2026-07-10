@@ -386,6 +386,18 @@ var DSP = (function () {
         }
       }
     }
+    // auxiliar (ventilador/bomba): 1×..3× en violeta
+    if (m.aux && m.aux.fr) {
+      for (var av = 1; av <= 3; av++) {
+        var fa = m.aux.fr * av; if (fa > fMax) break;
+        ctx.strokeStyle = 'rgba(128,66,180,0.7)';
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.moveTo(px(fa), mT); ctx.lineTo(px(fa), H - mB); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#7a3fa8';
+        ctx.fillText((m.aux.nombre ? m.aux.nombre.charAt(0) : 'V') + av + 'x', px(fa) + 2, H - mB - 6);
+      }
+    }
     // traza del espectro
     ctx.strokeStyle = '#1b2733'; ctx.lineWidth = 1;
     ctx.beginPath();

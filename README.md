@@ -378,3 +378,37 @@ revolución. Se dibujan 2 revoluciones por defecto.
    espectro de velocidad con marcas (1X/2X/3X azul, PP verde, fallas de
    rodamiento en franjas rojas ±10%), onda circular, y el diagnóstico del
    motor de reglas con semáforo y acciones.
+
+---
+
+## 9. Implementación (checklist final)
+
+Validado de punta a punta con una medición real de **AS 30** (4 CSV del VES004,
+50 kHz, m/s², 2²⁰ muestras/sensor):
+
+1. `npm i -g @google/clasp && clasp login`
+2. En la carpeta del repo: `clasp create --type sheets --title "Proyecto Vibraciones" --rootDir apps-script`
+   (o `cp .clasp.json.example .clasp.json` + tu `scriptId` si vinculas el
+   archivo maestro existente — **recomendado**: así el panel lee directamente
+   las hojas "Transmisión Por Correa/Directo").
+3. `clasp push` → abre el proyecto (`clasp open`).
+4. En la hoja: menú **🔧 Diagnóstico Kaeser → Inicializar hojas** (crea las
+   hojas de soporte; las de transmisión son las tuyas y no se tocan).
+5. **Deploy → New deployment → Web app** (ejecutar como tú; acceso: tu
+   dominio). La URL resultante es la interfaz de diagnóstico.
+6. Primer análisis: panel *Análisis de datos brutos* → tipo de transmisión →
+   equipo → cargar los 4 CSV → **Procesar**. La fs y la unidad (m/s²) se
+   detectan solas del archivo.
+
+### Lecciones del caso AS 30 integradas al motor
+- **RPM ventilador/auxiliar (opcional)**: con la nominal (p.ej. 1500), el
+  sistema hace *auto-lock* al pico real (±10%, p.ej. 1556 rpm por
+  deslizamiento), dibuja sus armónicos en violeta y los **excluye** del
+  emparejamiento de rodamientos — sin esto, el tren del ventilador
+  (25.9/51.9/77.8 Hz) dispara falsos FTF en los 4 sensores.
+- La ventana FTF sin defectos de pista/elemento **no condena**: acción =
+  verificar fuentes sub-síncronas (ventilador, **correa** en máquinas SK/SM/AS,
+  bombas) y tendenciar.
+- Los datos del AS 30 confirmaron la relación **1.2 macho/motor** medida
+  (70.2 Hz con motor a 58.75) y los **pasos de presión a 5×70.5 = 352.5 Hz**
+  con armónicos 2PP/3PP.
