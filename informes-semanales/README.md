@@ -16,6 +16,7 @@ gerencial los jueves a las 5:00 p. m.**
                  │  · valida el correo contra "Usuario"    │
                  │  · precarga Año / Semana / Nombre       │
                  │  · dibuja el formulario de SU área      │
+                 │  · NO puede tocar el informe gerencial  │
                  └───────────────┬─────────────────────────┘
                                  │ google.script.run
                  ┌───────────────▼─────────────────────────┐
@@ -27,7 +28,8 @@ gerencial los jueves a las 5:00 p. m.**
                  ┌───────────────▼─────────────────────────┐
                  │ Google Sheets (1 hoja por área)         │
                  └───────────────┬─────────────────────────┘
-                                 │ jueves 17:00 (disparador)
+                                 │ jueves 17:00 (disparador automático)
+                                 │ o menú de Sheets (sólo Administrador)
                  ┌───────────────▼─────────────────────────┐
                  │ Informe.gs → Gemini (opcional) → Correo │
                  │  Markdown con las 5 secciones exigidas  │
@@ -124,10 +126,14 @@ métricas anteriores, nunca las duplica.
 | Propiedad | Obligatoria | Para qué sirve |
 |---|---|---|
 | `CORREO_GERENTE` | ✅ | Destinatario del informe de los jueves. |
-| `CORREO_COPIA` | — | Copias (separadas por coma). |
-| `ADMIN_CORREOS` | — | Quién puede **enviar** el informe desde la interfaz. Si está vacía, pueden hacerlo los cargos de `CONFIG.CARGOS_CON_INFORME` (por defecto, Directores). |
+| `ADMIN_CORREOS` | ✅ | Correos del **Administrador** (separados por coma): los únicos que pueden ejecutar el envío manual y las acciones de configuración. Si se deja vacía, sólo puede operar el propietario del libro. |
+| `CORREO_COPIA` | — | Copias del informe (separadas por coma). |
 | `GEMINI_API_KEY` | — | Clave de la API de Gemini (se obtiene en [Google AI Studio](https://aistudio.google.com/apikey)). Activa la redacción asistida; sin ella se usa el informe automático. |
 | `MODELO_IA` | — | Modelo a usar. Por defecto `gemini-2.5-flash`. Se admite escribirlo con o sin el prefijo `models/`. |
+
+> 🔑 **La clave de Gemini no va en el código.** Va aquí, en las propiedades del
+> script, y `Ia.gs` la lee con `PropertiesService`. Escrita dentro de un `.gs`
+> quedaría versionada en Git y visible para cualquiera con acceso al proyecto.
 
 ### 4.3 Verificar la estructura
 
@@ -148,30 +154,71 @@ pueden alterar filas ajenas), y aun así Google entrega el correo del usuario qu
 entra —porque está en el mismo dominio—, que es lo que permite validarlo contra
 la hoja `Usuario`.
 
-### 4.5 Activar el envío automático
+### 4.5 Activar el envío automático de los jueves
 
-Menú **📊 Informes Semanales → Instalar envío automático (jueves 5:00 p. m.)**.
-Es idempotente: reinstalar no duplica el disparador. Apps Script ejecuta los
-disparadores por tiempo dentro de una ventana de ~15 minutos alrededor de la
-hora indicada.
+Menú **📊 Informes Semanales → 🔒 Instalar envío automático (jueves 5:00 p. m.)**.
+
+- **Este paso no es opcional.** Sin él, el informe no sale nunca solo. El menú
+  **🔒 Estado de la configuración** lo advierte en mayúsculas si falta.
+- Es idempotente: reinstalar no duplica el disparador.
+- La hora se interpreta en `America/Bogota` (declarada en `appsscript.json` y
+  fijada explícitamente con `.inTimezone()` al crear el disparador).
+- Apps Script ejecuta los disparadores por tiempo dentro de una ventana de
+  ~15 minutos alrededor de la hora indicada; para un informe semanal esa
+  precisión sobra.
+- El disparador corre con la cuenta que lo instaló: el correo sale desde esa
+  cuenta y consume su cuota diaria de Gmail. Instálalo con la cuenta que quieras
+  que figure como remitente.
+- Si un jueves falla el envío, el propio disparador avisa por correo a
+  `ADMIN_CORREOS` con el motivo del error.
 
 ---
 
 ## 5. Control de acceso
 
-La hoja `Usuario` (`Cargo | Nombre | Correo`) es la **única lista blanca**:
+Hay **dos roles y nada más**: el colaborador, que sólo registra su propio
+reporte; y el Administrador, único que puede disparar el informe a mano.
+
+### 5.1 Colaborador — la hoja `Usuario` es la lista blanca
 
 - El correo se toma de la sesión de Google, no de un campo del formulario: nadie
   puede reportar a nombre de otro colaborador desde la interfaz.
 - El `Cargo` se traduce al área con `areaDeCargo()`, que acepta variantes
   razonables (`SAU`, `Asesores CAN` → `Asesores KAM`, con o sin tildes).
 - Si el correo no está en la hoja, la interfaz no muestra ningún formulario.
-- Cada llamada al servidor (`apiGuardar`, `apiEnviarInforme`, …) revalida al
-  usuario: la interfaz nunca decide sola qué puede hacer alguien.
+- Cada llamada al servidor (`apiSesion`, `apiCargarRegistro`, `apiGuardar`)
+  revalida al usuario: la interfaz nunca decide sola qué puede hacer alguien.
 
 > ℹ️ La hoja `Usuario` del archivo actual no tiene ninguna fila con el cargo
 > **Asesores KAM**, aunque la hoja existe. Agrega a los asesores allí para que
 > puedan entrar a su formulario.
+
+### 5.2 El informe gerencial no es alcanzable desde la interfaz web
+
+La interfaz **no tiene** botón, pestaña ni pantalla de informe. Pero ocultar un
+botón no es una medida de seguridad: **cualquier función de `Code.gs` es
+invocable desde el navegador** con `google.script.run.<nombre>()`, así que un
+botón escondido seguiría siendo ejecutable desde la consola del navegador.
+
+Por eso la protección real es que **el endpoint no existe**: en `Code.gs` no hay
+ninguna función que previsualice, genere o envíe el informe. La acción no está
+oculta — no es alcanzable. Las pruebas verifican esto explícitamente.
+
+### 5.3 Quién puede ejecutarlo a mano
+
+El envío manual vive **sólo en el menú de Google Sheets**, y cada acción pasa
+por `exigirAdministrador_()`:
+
+- **Administrador** = correo listado en la propiedad `ADMIN_CORREOS`.
+- Si esa propiedad aún no se ha configurado, se acepta únicamente al
+  **propietario del libro**, para que el sistema no quede sin nadie que pueda
+  operarlo el primer día. En cuanto se configura `ADMIN_CORREOS`, esa excepción
+  deja de aplicar.
+- Quien no sea administrador ve el menú, pero al hacer clic recibe un aviso
+  explicando cómo pedir acceso. No se ejecuta nada.
+
+Además, con la implementación recomendada (§4.4) los colaboradores **no tienen
+acceso al libro de Sheets**, así que ni siquiera ven ese menú.
 
 ---
 
@@ -252,26 +299,24 @@ Detalles que importan en la práctica:
 
 ---
 
-## 7. Nota sobre el diseño de una columna
+## 7. Métricas Clave de Directores
 
-La columna **G de `Directores` — "Métricas Clave (Facturación, Forecast)"** está
-implementada literalmente como se especificó: tabla de `Valor | Observación`.
-En la práctica esa tabla no dice *cuál* métrica es cada fila, así que el
-consolidado sólo puede mostrar el par valor–observación tal cual lo escriba el
-director, y no puede compararlas entre semanas ni graficarlas.
+La columna **G de `Directores` — "Métricas Clave (Facturación, Forecast)"** es
+una tabla de tres columnas:
 
-Si en algún momento se quiere tendencia sobre esas cifras, basta con agregar una
-primera columna `KPI` en `Config.gs` (como ya la tiene *Gestión Comercial → F*)
-y declarar su KPI; nada más cambia:
+| Métrica | Valor | Observación |
+|---|---|---|
+| Facturación acumulada | 3.900.000.000 | 92% de la meta del mes |
+| Forecast del trimestre | 11.500.000.000 | Ajustado al alza |
 
-```js
-columnas: [
-  { clave: 'kpi', titulo: 'KPI' },                       // ← columna nueva
-  { clave: 'valor', titulo: 'Valor', tipo: 'numero' },
-  { clave: 'observacion', titulo: 'Observación' }
-],
-kpis: [{ metrica: '', valorCol: 'valor', etiquetaCol: 'kpi' }]
-```
+Que la fila diga **cuál** métrica es tiene una consecuencia concreta: cada una
+se vuelca a `KPI_Datos` con su propio nombre, así que se puede graficar su
+tendencia semana a semana y compararla entre directores. Con sólo valor y
+observación, esas cifras habrían sido texto suelto imposible de seguir en el
+tiempo.
+
+En el informe gerencial se leen como `Facturación acumulada: **3.900.000.000**
+— 92% de la meta del mes`.
 
 ---
 
@@ -282,7 +327,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~90 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~105 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -292,6 +337,16 @@ de las tablas dentro de una celda (incluidos los caracteres escapados), no
 duplicación de KPI, consolidación multi-área, las cinco secciones del informe
 con sus umbrales, y la conversión Markdown → HTML (incluido el escape de HTML
 malicioso).
+
+Dos bloques valen la pena por separado:
+
+- **El informe no es alcanzable desde la web** (§5.2): se verifica que las
+  funciones de informe *no existan* como endpoint, que `apiSesion` no exponga
+  permisos y que ni el HTML ni el JavaScript del cliente las mencionen. Si
+  alguien vuelve a agregar un botón, las pruebas fallan.
+- **Rol de Administrador** (§5.3): con y sin `ADMIN_CORREOS`, la excepción del
+  propietario, insensibilidad a mayúsculas y el mensaje de error que explica
+  cómo pedir acceso.
 
 La integración con Gemini se prueba con la API simulada, así que se verifica
 sin gastar cuota ni depender de la red: forma del `systemInstruction` y del
@@ -307,11 +362,21 @@ las pruebas lo detectan de inmediato.
 
 ## 9. Operación diaria
 
+**Colaborador** — sólo necesita la URL de la aplicación web:
+
 | Quiero… | Cómo |
 |---|---|
 | Reportar mi semana | Abrir la URL de la aplicación web. Año, semana y nombre vienen precargados. |
 | Corregir una semana pasada | Cambiar el selector *Periodo a reportar* (hasta 6 semanas atrás). |
-| Ver el informe antes del jueves | Pestaña **📈 Informe gerencial → Generar vista previa** (Directores y administradores). |
-| Enviarlo manualmente | Botón *Enviar al gerente*, o menú **Enviar informe ahora** desde Sheets. |
-| Saber quién falta por reportar | Los chips de cobertura en la pestaña del informe. |
-| Revisar la configuración | Menú **Estado de la configuración**. |
+
+**Administrador** — todo desde el menú de Google Sheets (🔒 = requiere estar en
+`ADMIN_CORREOS`):
+
+| Quiero… | Cómo |
+|---|---|
+| Que el informe salga solo los jueves | 🔒 **Instalar envío automático (jueves 5:00 p. m.)**. Una sola vez. |
+| Ver el informe antes del jueves | 🔒 **Previsualizar informe de esta semana**. No envía nada. |
+| Enviarlo a mano ahora | 🔒 **Enviar informe ahora (manual)**. Pide confirmación. |
+| Saber quién falta por reportar | Está en la vista previa: el anexo de cobertura al final del informe. |
+| Revisar la configuración | 🔒 **Estado de la configuración** (gerente, admins, IA, disparador). |
+| Comprobar que una columna no se rompió | 🔒 **Verificar / crear hojas**. |

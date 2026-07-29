@@ -11,24 +11,45 @@
  * ---------------------------------------------------------------------------
  */
 
-/** Menú personalizado al abrir la hoja de cálculo. */
+/**
+ * Menú personalizado al abrir la hoja de cálculo.
+ *
+ * Todas las acciones salvo "Abrir interfaz web" exigen rol de Administrador
+ * (ver `accionAdministrador_`). El menú se muestra igual, pero al ejecutarlo
+ * quien no sea administrador recibe un aviso y nada más ocurre.
+ */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📊 Informes Semanales')
-    .addItem('Verificar / crear hojas', 'menuInicializar')
     .addItem('Abrir interfaz web (URL)', 'menuUrlWebApp')
     .addSeparator()
-    .addItem('Previsualizar informe de esta semana', 'menuPrevisualizar')
-    .addItem('Enviar informe ahora', 'menuEnviarAhora')
+    .addItem('🔒 Verificar / crear hojas', 'menuInicializar')
+    .addItem('🔒 Previsualizar informe de esta semana', 'menuPrevisualizar')
+    .addItem('🔒 Enviar informe ahora (manual)', 'menuEnviarAhora')
     .addSeparator()
-    .addItem('Instalar envío automático (jueves 5:00 p. m.)', 'menuInstalarDisparador')
-    .addItem('Estado de la configuración', 'menuEstado')
+    .addItem('🔒 Instalar envío automático (jueves 5:00 p. m.)', 'menuInstalarDisparador')
+    .addItem('🔒 Estado de la configuración', 'menuEstado')
     .addToUi();
 }
 
+/**
+ * Envuelve una acción de menú exigiendo rol de Administrador y mostrando los
+ * errores como diálogo en vez de dejarlos en el registro de ejecuciones.
+ */
+function accionAdministrador_(titulo, fn) {
+  var ui = SpreadsheetApp.getUi();
+  try {
+    exigirAdministrador_();
+    fn(ui);
+  } catch (e) {
+    ui.alert(titulo, e.message, ui.ButtonSet.OK);
+  }
+}
+
 function menuInicializar() {
-  SpreadsheetApp.getUi().alert('Verificación de hojas', inicializarHojas(),
-    SpreadsheetApp.getUi().ButtonSet.OK);
+  accionAdministrador_('Verificación de hojas', function (ui) {
+    ui.alert('Verificación de hojas', inicializarHojas(), ui.ButtonSet.OK);
+  });
 }
 
 function menuUrlWebApp() {
@@ -39,49 +60,66 @@ function menuUrlWebApp() {
 }
 
 function menuPrevisualizar() {
-  var p = periodoActual();
-  var informe = construirInforme(p.anio, p.semana, true);
-  var html = HtmlService
-    .createHtmlOutput('<div style="font-family:Segoe UI,Arial,sans-serif;padding:8px">' +
-                      markdownAHtml_(informe.markdown) + '</div>')
-    .setWidth(900).setHeight(640);
-  SpreadsheetApp.getUi().showModalDialog(html, 'Vista previa · ' + informe.consolidado.etiqueta);
+  accionAdministrador_('Vista previa del informe', function (ui) {
+    var p = periodoActual();
+    var informe = construirInforme(p.anio, p.semana, true);
+    var aviso = informe.aviso
+      ? '<p style="background:#fff6e0;border:1px solid #f0dca6;color:#9a6700;' +
+        'padding:8px 12px;border-radius:6px;font-size:13px">' + informe.aviso + '</p>'
+      : '';
+    var html = HtmlService
+      .createHtmlOutput('<div style="font-family:Segoe UI,Arial,sans-serif;padding:8px">' +
+                        aviso + markdownAHtml_(informe.markdown) + '</div>')
+      .setWidth(900).setHeight(640);
+    ui.showModalDialog(html, 'Vista previa · ' + informe.consolidado.etiqueta);
+  });
 }
 
 function menuEnviarAhora() {
-  var ui = SpreadsheetApp.getUi();
-  var p = periodoActual();
-  var respuesta = ui.alert('Enviar informe gerencial',
-    '¿Enviar ahora el informe de la ' + etiquetaSemana(p.anio, p.semana) + ' al gerente?',
-    ui.ButtonSet.YES_NO);
-  if (respuesta !== ui.Button.YES) return;
-  try {
+  accionAdministrador_('Enviar informe gerencial', function (ui) {
+    var p = periodoActual();
+    var respuesta = ui.alert('Enviar informe gerencial',
+      '¿Enviar ahora el informe de la ' + etiquetaSemana(p.anio, p.semana) + ' al gerente?',
+      ui.ButtonSet.YES_NO);
+    if (respuesta !== ui.Button.YES) return;
     ui.alert(enviarInforme(p.anio, p.semana).mensaje);
-  } catch (e) {
-    ui.alert('No se pudo enviar: ' + e.message);
-  }
+  });
 }
 
 function menuInstalarDisparador() {
-  SpreadsheetApp.getUi().alert(instalarDisparadores());
+  accionAdministrador_('Envío automático', function (ui) {
+    ui.alert('Envío automático', instalarDisparadores(), ui.ButtonSet.OK);
+  });
 }
 
 function menuEstado() {
-  var props = PropertiesService.getScriptProperties();
-  var lineas = [
-    'Correo del gerente: ' + (props.getProperty(CONFIG.PROP_CORREO_GERENTE) || '⚠️ sin configurar'),
-    'Copias: ' + (props.getProperty(CONFIG.PROP_COPIA_INFORME) || '—'),
-    'Administradores: ' + (props.getProperty(CONFIG.PROP_ADMINS) || '—'),
-    'Redacción con IA: ' + (iaDisponible() ? 'activa (' + modeloIa_() + ')' : 'inactiva (informe automático)'),
-    'Zona horaria: ' + CONFIG.ZONA_HORARIA,
-    ''
-  ];
-  var triggers = ScriptApp.getProjectTriggers().filter(function (t) {
-    return t.getHandlerFunction() === HANDLER_INFORME;
+  accionAdministrador_('Estado de la configuración', function (ui) {
+    var props = PropertiesService.getScriptProperties();
+    var admins = correosAdmin_();
+    var lineas = [
+      'Correo del gerente: ' + (props.getProperty(CONFIG.PROP_CORREO_GERENTE) || '⚠️ sin configurar'),
+      'Copias: ' + (props.getProperty(CONFIG.PROP_COPIA_INFORME) || '—'),
+      'Administradores: ' + (admins.length ? admins.join(', ')
+        : '⚠️ sin configurar (sólo el propietario del libro puede operar)'),
+      'Redacción con IA: ' + (iaDisponible()
+        ? 'activa (' + modeloIa_() + ')' : 'inactiva (informe automático)'),
+      'Zona horaria: ' + CONFIG.ZONA_HORARIA,
+      ''
+    ];
+
+    var triggers = ScriptApp.getProjectTriggers().filter(function (t) {
+      return t.getHandlerFunction() === HANDLER_INFORME;
+    });
+    if (triggers.length) {
+      lineas.push('Envío automático: instalado (jueves 5:00 p. m., ' + CONFIG.ZONA_HORARIA + ')');
+      var p = periodoActual();
+      lineas.push('Próximo informe: ' + etiquetaSemana(p.anio, p.semana));
+    } else {
+      lineas.push('Envío automático: ⚠️ NO instalado — el informe no saldrá el jueves.');
+    }
+
+    ui.alert('Estado de la configuración', lineas.join('\n'), ui.ButtonSet.OK);
   });
-  lineas.push('Disparador semanal: ' + (triggers.length ? 'instalado' : '⚠️ no instalado'));
-  SpreadsheetApp.getUi().alert('Estado de la configuración', lineas.join('\n'),
-    SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 /* ===================== Aplicación web ===================== */
@@ -134,12 +172,7 @@ function apiSesion() {
       etiqueta: etiquetaSemana(periodo.anio, periodo.semana)
     },
     periodosEditables: ultimosPeriodos(CONFIG.SEMANAS_EDITABLES),
-    registro: apiCargarRegistro(periodo.anio, periodo.semana),
-    permisos: {
-      verInforme: puedeVerInforme_(usuario),
-      enviarInforme: puedeEnviarInforme_(usuario)
-    },
-    iaActiva: iaDisponible()
+    registro: apiCargarRegistro(periodo.anio, periodo.semana)
   };
 }
 
@@ -200,56 +233,16 @@ function apiGuardar(datos) {
   };
 }
 
-/** Vista previa del informe gerencial (HTML listo para incrustar). */
-function apiPrevisualizarInforme(anio, semana, usarIa) {
-  var sesion = usuarioActual();
-  if (!sesion.ok) throw new Error(sesion.motivo);
-  if (!puedeVerInforme_(sesion.usuario)) {
-    throw new Error('No tienes permiso para ver el informe gerencial.');
-  }
-
-  var informe = construirInforme(Number(anio), Number(semana), usarIa !== false);
-  return {
-    ok: true,
-    html: markdownAHtml_(informe.markdown),
-    markdown: informe.markdown,
-    fuente: informe.fuente,
-    aviso: informe.aviso,
-    etiqueta: informe.consolidado.etiqueta,
-    totalReportes: informe.consolidado.totalReportes,
-    faltantes: informe.consolidado.faltantes
-  };
-}
-
-/** Envía el informe gerencial por correo (sólo administradores). */
-function apiEnviarInforme(anio, semana) {
-  var sesion = usuarioActual();
-  if (!sesion.ok) throw new Error(sesion.motivo);
-  if (!puedeEnviarInforme_(sesion.usuario)) {
-    throw new Error('No tienes permiso para enviar el informe gerencial.');
-  }
-  return enviarInforme(Number(anio), Number(semana));
-}
-
-/** Estado de cobertura de la semana (quién ya reportó y quién no). */
-function apiCobertura(anio, semana) {
-  var sesion = usuarioActual();
-  if (!sesion.ok) throw new Error(sesion.motivo);
-  if (!puedeVerInforme_(sesion.usuario)) {
-    throw new Error('No tienes permiso para ver la cobertura.');
-  }
-
-  var consolidado = consolidarSemana(Number(anio), Number(semana));
-  var reportaron = [];
-  for (var a = 0; a < ORDEN_AREAS.length; a++) {
-    var lista = consolidado.areas[ORDEN_AREAS[a]] || [];
-    for (var i = 0; i < lista.length; i++) {
-      reportaron.push({ nombre: lista[i].nombre, area: ORDEN_AREAS[a] });
-    }
-  }
-  return {
-    etiqueta: consolidado.etiqueta,
-    reportaron: reportaron,
-    faltantes: consolidado.faltantes
-  };
-}
+/*
+ * NOTA DE SEGURIDAD — el informe gerencial no tiene endpoint.
+ *
+ * Aquí NO existe ninguna función que previsualice, genere o envíe el informe.
+ * Es deliberado: cualquier función de este archivo es invocable desde el
+ * navegador con `google.script.run.<nombre>()`, así que esconder un botón en el
+ * HTML no impediría que alguien la llamara desde la consola. Al no existir el
+ * endpoint, la acción sencillamente no es alcanzable desde la interfaz.
+ *
+ * El informe sale por dos caminos, y sólo por esos dos:
+ *   1. Automático: disparador `enviarInformeSemanal` (jueves 5:00 p. m.).
+ *   2. Manual: menú de Google Sheets, restringido con `exigirAdministrador_()`.
+ */

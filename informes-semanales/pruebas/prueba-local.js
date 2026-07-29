@@ -65,9 +65,13 @@ class FakeSheet {
   setFrozenRows() { return this; }
 }
 class FakeSpreadsheet {
-  constructor() { this.sheets = {}; }
+  constructor() { this.sheets = {}; this.propietario = null; }
   getSheetByName(n) { return this.sheets[n] || null; }
   insertSheet(n) { this.sheets[n] = new FakeSheet(n); return this.sheets[n]; }
+  getOwner() {
+    if (!this.propietario) throw new Error('propietario no disponible');
+    return { getEmail: () => this.propietario };
+  }
 }
 const LIBRO = new FakeSpreadsheet();
 
@@ -303,10 +307,38 @@ S.guardarRegistro('Asesores KAM', {
   }
 });
 
+S.guardarRegistro('Directores', {
+  anio: P.anio, semana: P.semana, nombre: 'Luis Rodriguez',
+  campos: {
+    novedadesPersonal: 'Zona centro sin novedades de personal.',
+    visitasClientes: [{ cliente: 'Alpina', actividad: 'Cierre de convenio' }],
+    metricasClave: [
+      { metrica: 'Facturación acumulada', valor: '3.900.000.000', observacion: '92% de la meta del mes' },
+      { metrica: 'Forecast del trimestre', valor: '11.500.000.000', observacion: 'Ajustado al alza' }
+    ],
+    ordenesImportantes: [{ cliente: 'Alpina', monto: '320.000.000' }],
+    estadoContratos: [{ estado: 'Vigentes', cantidad: '48' }],
+    notasCredito: 'Una nota crédito por despacho errado, resuelta.'
+  }
+});
+
 const consolidado = S.consolidarSemana(P.anio, P.semana);
-ok(consolidado.totalReportes === 6, '6 reportes consolidados', consolidado.totalReportes);
-ok(consolidado.faltantes.length === 2, '2 pendientes de envío (Andrés Peña y Luis Rodriguez)',
-   consolidado.faltantes.map(f => f.nombre));
+ok(consolidado.totalReportes === 7, '7 reportes consolidados', consolidado.totalReportes);
+ok(consolidado.faltantes.length === 1 && consolidado.faltantes[0].nombre === 'Andrés Camilo Peña',
+   '1 pendiente de envío (Andrés Camilo Peña)', consolidado.faltantes.map(f => f.nombre));
+
+/* Columna G de Directores: Métrica | Valor | Observación */
+const regDir = S.leerRegistro('Directores', P.anio, P.semana, 'Luis Rodriguez');
+const metricasDir = regDir.campos.metricasClave.filas;
+ok(metricasDir.length === 2, 'métricas clave con 2 filas');
+ok(metricasDir[0].metrica === 'Facturación acumulada' &&
+   metricasDir[0].valor === '3.900.000.000' &&
+   metricasDir[0].observacion === '92% de la meta del mes',
+   'la fila conserva Métrica / Valor / Observación', metricasDir[0]);
+const kpisDir = S.kpisDeSemana(P.anio, P.semana)['Directores'] || [];
+ok(kpisDir.some(k => k.metrica === 'Facturación acumulada' && k.valor === 3900000000),
+   'la métrica nombrada se vuelca a KPI_Datos y ya es graficable',
+   kpisDir.map(k => k.metrica));
 
 /* ===== 7. Informe ===== */
 console.log('\n[7] Informe gerencial determinista');
@@ -328,6 +360,9 @@ ok(md.slice(md.indexOf('## 👥')).indexOf('Analista DPA') >= 0,
 ok(md.indexOf('$1.890.000.000') >= 0, 'suma de OC por sucursal formateada',
    (md.match(/total \*\*\$[\d.]+/) || [])[0]);
 ok(md.indexOf('87,5% FTF') >= 0 || md.indexOf('**87,5% FTF**') >= 0, 'FTF reportado');
+ok(md.indexOf('Facturación acumulada: **3.900.000.000**') >= 0,
+   'la métrica clave se lee con su nombre en el informe',
+   (md.match(/Facturación acumulada[^\n]*/) || [])[0]);
 ok(md.indexOf('Pendientes de envío:') >= 0, 'anexo de cobertura');
 
 /* ===== 8. Markdown → HTML ===== */
@@ -349,13 +384,47 @@ ok(apiS.ok && apiS.area.nombre === 'SAU, Renta, CDR', 'apiSesion devuelve el ár
 ok(apiS.area.campos.length === 10, 'SAU expone 10 campos', apiS.area.campos.length);
 ok(apiS.registro && apiS.registro.campos.serviciosUtility === '41', 'precarga el registro existente');
 ok(apiS.periodosEditables.length === 6, '6 periodos editables');
-ok(apiS.permisos.verInforme === false, 'un usuario de SAU no ve el informe gerencial');
-let bloqueado = false;
-try { S.apiPrevisualizarInforme(P.anio, P.semana, false); } catch (e) { bloqueado = true; }
-ok(bloqueado, 'apiPrevisualizarInforme rechaza a quien no tiene permiso');
 let rechazoPeriodo = false;
 try { S.apiGuardar({ anio: 2019, semana: 5, campos: {} }); } catch (e) { rechazoPeriodo = true; }
 ok(rechazoPeriodo, 'apiGuardar rechaza semanas fuera de la ventana de corrección');
+
+/* El informe gerencial no debe ser alcanzable desde la interfaz web: no basta
+   con ocultar el botón, la función no puede existir como endpoint. */
+console.log('\n[9b] El informe no es alcanzable desde la interfaz web');
+['apiPrevisualizarInforme', 'apiEnviarInforme', 'apiCobertura', 'apiInforme'].forEach(nombre => {
+  ok(typeof S[nombre] === 'undefined', 'no existe el endpoint ' + nombre + '()');
+});
+ok(apiS.permisos === undefined, 'apiSesion ya no expone permisos de informe');
+const js = fs.readFileSync(path.join(DIR, 'Js.html'), 'utf8');
+const indexHtml = fs.readFileSync(path.join(DIR, 'Index.html'), 'utf8');
+ok(js.indexOf('apiEnviarInforme') < 0 && js.indexOf('apiPrevisualizarInforme') < 0,
+   'el cliente no invoca ninguna función de informe');
+ok(indexHtml.indexOf('Informe gerencial') < 0 && indexHtml.indexOf('Enviar al gerente') < 0,
+   'el HTML no tiene botón ni pestaña de informe');
+
+/* ===== 9c. Rol de Administrador ===== */
+console.log('\n[9c] Sólo el Administrador ejecuta el envío manual');
+ok(S.esAdministrador_() === false,
+   'sin ADMIN_CORREOS y sin propietario conocido, nadie es administrador');
+LIBRO.propietario = 'yiber.medina@kaeser.com';
+ok(S.esAdministrador_() === true,
+   'sin ADMIN_CORREOS, el propietario del libro sí puede operar');
+PROPS.ADMIN_CORREOS = 'gerencia@kaeser.com, ti@kaeser.com';
+ok(S.esAdministrador_() === false,
+   'con ADMIN_CORREOS configurada, el propietario ya NO basta');
+PROPS.ADMIN_CORREOS = 'gerencia@kaeser.com, YIBER.MEDINA@kaeser.com';
+ok(S.esAdministrador_() === true, 'un correo de la lista sí es administrador (sin importar mayúsculas)');
+let sinPermiso = false;
+try { S.exigirAdministrador_(); } catch (e) { sinPermiso = true; }
+ok(sinPermiso === false, 'exigirAdministrador_ deja pasar al administrador');
+PROPS.ADMIN_CORREOS = 'otra.persona@kaeser.com';
+sinPermiso = false;
+let mensajePermiso = '';
+try { S.exigirAdministrador_(); } catch (e) { sinPermiso = true; mensajePermiso = e.message; }
+ok(sinPermiso, 'exigirAdministrador_ bloquea a quien no está en la lista');
+ok(mensajePermiso.indexOf('ADMIN_CORREOS') >= 0, 'el error explica cómo darse acceso', mensajePermiso);
+delete PROPS.ADMIN_CORREOS;
+LIBRO.propietario = null;
 
 /* ===== 10. Respaldo sin IA ===== */
 console.log('\n[10] Respaldo cuando la IA no está disponible');

@@ -7,7 +7,8 @@
  * texto y los campos "Tabla" se vuelven filas dinámicas que el usuario agrega.
  *
  * Nada del estado de acceso vive aquí: el servidor vuelve a validar al usuario
- * en cada llamada (apiGuardar, apiPrevisualizarInforme, apiEnviarInforme).
+ * en cada llamada (`apiSesion`, `apiCargarRegistro`, `apiGuardar`), y el nombre
+ * con el que se guarda sale de la hoja "Usuario", no del cliente.
  * ---------------------------------------------------------------------------
  */
 
@@ -75,12 +76,6 @@ function iniciar(sesion) {
   $('verNombre').textContent = sesion.usuario.nombre;
 
   llenarPeriodos($('selectorPeriodo'), sesion.periodosEditables);
-  llenarPeriodos($('periodoInforme'), sesion.periodosEditables);
-
-  if (sesion.permisos.verInforme) {
-    $('tabInforme').classList.remove('oculto');
-    if (!sesion.permisos.enviarInforme) $('btnEnviar').disabled = true;
-  }
 
   pintarPeriodo(sesion.periodo.anio, sesion.periodo.semana);
   pintarFormulario(sesion.registro);
@@ -300,65 +295,10 @@ function recargarRegistro() {
     .apiCargarRegistro(periodo.anio, periodo.semana);
 }
 
-/* ===================== Pestañas ===================== */
-
-function verPestana(cual) {
-  var esFormulario = (cual === 'formulario');
-  $('panelFormulario').classList.toggle('oculto', !esFormulario);
-  $('panelInforme').classList.toggle('oculto', esFormulario);
-  $('tabFormulario').classList.toggle('activa', esFormulario);
-  $('tabInforme').classList.toggle('activa', !esFormulario);
-}
-
-/* ===================== Informe gerencial ===================== */
-
-function generarInforme() {
-  var periodo = periodoSeleccionado($('periodoInforme'));
-  mostrarAviso('mensajeInforme', '', '');
-  $('salidaInforme').innerHTML = '<p class="cargando">Consolidando las siete áreas…</p>';
-  $('cobertura').innerHTML = '';
-
-  google.script.run
-    .withSuccessHandler(function (r) {
-      $('salidaInforme').innerHTML = r.html;
-      pintarCobertura(r.totalReportes, r.faltantes);
-      if (r.aviso) mostrarAviso('mensajeInforme', r.aviso, 'alerta');
-      else if (r.fuente === 'ia') {
-        mostrarAviso('mensajeInforme', 'Redactado con asistencia de IA sobre los datos reportados.', 'info');
-      }
-    })
-    .withFailureHandler(function (e) {
-      $('salidaInforme').innerHTML = '';
-      mostrarAviso('mensajeInforme', e.message, 'error');
-    })
-    .apiPrevisualizarInforme(periodo.anio, periodo.semana, true);
-}
-
-function pintarCobertura(total, faltantes) {
-  var cont = $('cobertura');
-  cont.innerHTML = '';
-  cont.appendChild(crear('span', { clase: 'chip', texto: total + ' reporte(s) recibido(s)' }));
-  (faltantes || []).forEach(function (f) {
-    cont.appendChild(crear('span', { clase: 'chip falta', texto: 'Falta: ' + f.nombre + ' · ' + f.area }));
-  });
-}
-
-function enviarInforme() {
-  var periodo = periodoSeleccionado($('periodoInforme'));
-  if (!confirm('¿Enviar el informe de esa semana al gerente por correo?')) return;
-
-  $('btnEnviar').disabled = true;
-  mostrarAviso('mensajeInforme', 'Enviando…', 'info');
-
-  google.script.run
-    .withSuccessHandler(function (r) {
-      $('btnEnviar').disabled = false;
-      mostrarAviso('mensajeInforme', '✔ ' + r.mensaje, 'ok');
-    })
-    .withFailureHandler(function (e) {
-      $('btnEnviar').disabled = false;
-      mostrarAviso('mensajeInforme', 'No se pudo enviar: ' + e.message, 'error');
-    })
-    .apiEnviarInforme(periodo.anio, periodo.semana);
-}
+/*
+ * El informe gerencial no se opera desde esta interfaz: no hay pantalla, ni
+ * botón, ni llamada al servidor. Sale automáticamente los jueves a las
+ * 5:00 p. m. y, de forma manual, sólo desde el menú de Google Sheets con rol
+ * de Administrador.
+ */
 </script>

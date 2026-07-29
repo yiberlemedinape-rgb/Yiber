@@ -62,8 +62,11 @@ var CONFIG = {
   /** Techo de tokens de salida (incluye los tokens de razonamiento). */
   IA_MAX_TOKENS: 16384,
 
-  /** Cargos que además de su formulario pueden ver/enviar el informe gerencial. */
-  CARGOS_CON_INFORME: ['Directores'],
+  /**
+   * El informe gerencial NO se opera desde la interfaz web: sale solo por el
+   * disparador de los jueves y, de forma manual, únicamente desde el menú de
+   * Google Sheets y sólo para los correos de ADMIN_CORREOS.
+   */
 
   /** Asunto del correo semanal. */
   ASUNTO_INFORME: 'Informe Gerencial Semanal — Kaeser Compresores'
@@ -179,11 +182,14 @@ var ESQUEMA = {
       { col: 'G', clave: 'metricasClave', tipo: 'tabla',
         titulo: 'Métricas Clave (Facturación, Forecast)',
         encabezado: 'Métricas Clave (Facturación, Forecast)',
-        ayuda: 'Una fila por cifra: el valor y su lectura (ej. "1.250 MM" / "Facturación acumulada, 92% de la meta").',
+        ayuda: 'Una fila por cifra: qué métrica es, su valor y la lectura ' +
+               '(ej. "Facturación acumulada" / "1.250.000.000" / "92% de la meta del mes").',
         columnas: [
+          { clave: 'metrica', titulo: 'Métrica' },
           { clave: 'valor', titulo: 'Valor', tipo: 'numero' },
           { clave: 'observacion', titulo: 'Observación' }
-        ] },
+        ],
+        kpis: [{ metrica: '', valorCol: 'valor', etiquetaCol: 'metrica' }] },
 
       { col: 'H', clave: 'ordenesImportantes', tipo: 'tabla',
         titulo: 'Órdenes Importantes Recibidas',

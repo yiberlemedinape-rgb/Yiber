@@ -122,19 +122,43 @@ function correosAdmin_() {
     .filter(function (c) { return c.length > 0; });
 }
 
-/** ¿Este usuario puede previsualizar y enviar el informe gerencial? */
-function puedeVerInforme_(usuario) {
-  if (!usuario) return false;
-  if (correosAdmin_().indexOf(usuario.correo) >= 0) return true;
-  return CONFIG.CARGOS_CON_INFORME.indexOf(usuario.area) >= 0;
+/** Correo del propietario del libro (cadena vacía si Google no lo expone). */
+function correoPropietario_() {
+  try {
+    var duenio = libro_().getOwner();
+    return duenio ? String(duenio.getEmail()).toLowerCase() : '';
+  } catch (e) {
+    return '';
+  }
 }
 
-/** ¿Este usuario puede disparar el envío real del correo? */
-function puedeEnviarInforme_(usuario) {
-  if (!usuario) return false;
+/**
+ * ¿Quien está ejecutando es el Administrador?
+ *
+ * El informe gerencial sólo puede dispararse a mano desde el menú de Google
+ * Sheets, y sólo por un administrador. La interfaz web no expone esta acción
+ * en absoluto (ver Code.gs: no existe ningún endpoint que la ejecute).
+ *
+ * Administrador = correo listado en ADMIN_CORREOS. Si esa propiedad todavía no
+ * se ha configurado, se acepta únicamente al propietario del libro, para no
+ * dejar el sistema sin nadie que pueda operarlo el primer día.
+ */
+function esAdministrador_() {
+  var correo = correoSesion_();
+  if (!correo) return false;
+
   var admins = correosAdmin_();
-  // Si nadie configuró administradores, se permite a los cargos autorizados
-  // para no bloquear la puesta en marcha.
-  if (admins.length === 0) return CONFIG.CARGOS_CON_INFORME.indexOf(usuario.area) >= 0;
-  return admins.indexOf(usuario.correo) >= 0;
+  if (admins.length) return admins.indexOf(correo) >= 0;
+
+  var propietario = correoPropietario_();
+  return propietario !== '' && propietario === correo;
+}
+
+/** Lanza un error si quien ejecuta no es administrador. */
+function exigirAdministrador_() {
+  if (esAdministrador_()) return;
+  throw new Error(
+    'Sólo el Administrador puede ejecutar esta acción. Agrega tu correo a la ' +
+    'propiedad de script "' + CONFIG.PROP_ADMINS + '" ' +
+    '(Configuración del proyecto → Propiedades del script).');
 }

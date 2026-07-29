@@ -342,8 +342,9 @@ function seccionComercial_(consolidado, kpis) {
     hubo = true;
     L.push('**Métricas clave reportadas por dirección**');
     for (var m = 0; m < metricasDir.length; m++) {
-      L.push('- **' + (metricasDir[m].fila.valor || 'N/D') + '** — ' +
-             (metricasDir[m].fila.observacion || 'sin observación') +
+      var fm = metricasDir[m].fila;
+      L.push('- ' + (fm.metrica || 'Métrica sin nombre') + ': **' + (fm.valor || 'N/D') + '**' +
+             (fm.observacion ? ' — ' + fm.observacion : '') +
              ' _(' + metricasDir[m].autor + ')_');
     }
     L.push('');
