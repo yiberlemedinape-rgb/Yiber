@@ -1,0 +1,364 @@
+<script>
+/**
+ * Js.html
+ * ---------------------------------------------------------------------------
+ * Lógica de la interfaz web. El servidor manda el ESQUEMA del área del usuario
+ * y aquí se dibuja el formulario: los campos "Campo Simple" se vuelven áreas de
+ * texto y los campos "Tabla" se vuelven filas dinámicas que el usuario agrega.
+ *
+ * Nada del estado de acceso vive aquí: el servidor vuelve a validar al usuario
+ * en cada llamada (apiGuardar, apiPrevisualizarInforme, apiEnviarInforme).
+ * ---------------------------------------------------------------------------
+ */
+
+var SESION = null;      // respuesta de apiSesion()
+var CAMPOS = [];        // definición de campos del área
+var SUCIO = false;      // ¿hay cambios sin guardar?
+
+/* ===================== Utilidades de DOM ===================== */
+
+function $(id) { return document.getElementById(id); }
+
+function crear(tag, props, hijos) {
+  var el = document.createElement(tag);
+  if (props) {
+    for (var k in props) {
+      if (k === 'clase') el.className = props[k];
+      else if (k === 'texto') el.textContent = props[k];
+      else if (k === 'html') el.innerHTML = props[k];
+      else if (k.indexOf('on') === 0) el.addEventListener(k.slice(2), props[k]);
+      else el.setAttribute(k, props[k]);
+    }
+  }
+  (hijos || []).forEach(function (h) { if (h) el.appendChild(h); });
+  return el;
+}
+
+function mostrarAviso(idElemento, texto, tipo) {
+  var el = $(idElemento);
+  if (!texto) { el.className = 'aviso oculto'; el.textContent = ''; return; }
+  el.className = 'aviso ' + (tipo || 'info');
+  el.textContent = texto;
+}
+
+/* ===================== Arranque ===================== */
+
+window.addEventListener('load', function () {
+  google.script.run
+    .withSuccessHandler(iniciar)
+    .withFailureHandler(function (e) { bloquear(e.message); })
+    .apiSesion();
+});
+
+function bloquear(motivo) {
+  $('cargando').classList.add('oculto');
+  $('bloqueo').classList.remove('oculto');
+  $('bloqueo').textContent = motivo;
+  $('chipNombre').textContent = 'Sin acceso';
+}
+
+function iniciar(sesion) {
+  if (!sesion || !sesion.ok) { bloquear(sesion ? sesion.motivo : 'Respuesta vacía del servidor.'); return; }
+
+  SESION = sesion;
+  CAMPOS = sesion.area.campos;
+
+  $('cargando').classList.add('oculto');
+  $('app').classList.remove('oculto');
+
+  $('chipNombre').textContent = sesion.usuario.nombre;
+  $('chipCargo').textContent = sesion.usuario.cargo + ' · ' + sesion.usuario.correo;
+
+  $('tituloArea').textContent = sesion.area.icono + '  ' + sesion.area.nombre;
+  $('descripcionArea').textContent = sesion.area.descripcion || '';
+
+  $('verNombre').textContent = sesion.usuario.nombre;
+
+  llenarPeriodos($('selectorPeriodo'), sesion.periodosEditables);
+  llenarPeriodos($('periodoInforme'), sesion.periodosEditables);
+
+  if (sesion.permisos.verInforme) {
+    $('tabInforme').classList.remove('oculto');
+    if (!sesion.permisos.enviarInforme) $('btnEnviar').disabled = true;
+  }
+
+  pintarPeriodo(sesion.periodo.anio, sesion.periodo.semana);
+  pintarFormulario(sesion.registro);
+
+  window.addEventListener('beforeunload', function (e) {
+    if (!SUCIO) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+}
+
+function llenarPeriodos(select, periodos) {
+  select.innerHTML = '';
+  periodos.forEach(function (p) {
+    select.appendChild(crear('option', { value: p.anio + '-' + p.semana, texto: p.etiqueta }));
+  });
+}
+
+function periodoSeleccionado(select) {
+  var partes = select.value.split('-');
+  return { anio: Number(partes[0]), semana: Number(partes[1]) };
+}
+
+function pintarPeriodo(anio, semana) {
+  $('verAnio').textContent = anio;
+  $('verSemana').textContent = semana;
+}
+
+/* ===================== Formulario ===================== */
+
+function pintarFormulario(registro) {
+  var contenedor = $('campos');
+  contenedor.innerHTML = '';
+  var valores = (registro && registro.campos) ? registro.campos : {};
+
+  CAMPOS.forEach(function (campo) {
+    var bloque = crear('div', { clase: 'campo', 'data-clave': campo.clave });
+    bloque.appendChild(crear('label', { clase: 'titulo', texto: campo.titulo }));
+    if (campo.ayuda) bloque.appendChild(crear('div', { clase: 'ayuda', texto: campo.ayuda }));
+
+    if (campo.tipo === 'tabla') {
+      bloque.appendChild(construirTabla(campo, valores[campo.clave] || []));
+    } else {
+      bloque.appendChild(construirTexto(campo, valores[campo.clave] || ''));
+    }
+    contenedor.appendChild(bloque);
+  });
+
+  SUCIO = false;
+  $('estadoGuardado').textContent = registro
+    ? 'Ya reportaste esta semana. Puedes corregir y volver a guardar.'
+    : 'Aún no has reportado esta semana.';
+}
+
+function construirTexto(campo, valor) {
+  var lineas = campo.lineas || 3;
+  if (lineas <= 1) {
+    return crear('input', {
+      type: 'text', value: valor, 'data-campo': campo.clave,
+      oninput: function () { SUCIO = true; }
+    });
+  }
+  var ta = crear('textarea', {
+    rows: lineas, 'data-campo': campo.clave,
+    oninput: function () { SUCIO = true; }
+  });
+  ta.value = valor;
+  return ta;
+}
+
+function construirTabla(campo, filas) {
+  var envoltura = crear('div', { clase: 'tabla-envoltura' });
+  var tabla = crear('table', { clase: 'dinamica' });
+
+  var thead = crear('thead');
+  var trh = crear('tr');
+  campo.columnas.forEach(function (c) { trh.appendChild(crear('th', { texto: c.titulo })); });
+  trh.appendChild(crear('th', { texto: '' }));
+  thead.appendChild(trh);
+  tabla.appendChild(thead);
+
+  var tbody = crear('tbody', { 'data-tabla': campo.clave });
+  tabla.appendChild(tbody);
+  envoltura.appendChild(tabla);
+
+  (filas.length ? filas : []).forEach(function (fila) { agregarFila(tbody, campo, fila); });
+  if (!filas.length) filaVacia(tbody, campo);
+
+  var contenedor = crear('div');
+  contenedor.appendChild(envoltura);
+  contenedor.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '+ Agregar fila',
+    onclick: function () { agregarFila(tbody, campo, null); SUCIO = true; }
+  }));
+  return contenedor;
+}
+
+/** Fila indicadora de "sin datos" que desaparece al agregar la primera fila. */
+function filaVacia(tbody, campo) {
+  var tr = crear('tr', { clase: 'vacia' });
+  tr.appendChild(crear('td', {
+    colspan: campo.columnas.length + 1,
+    texto: 'Sin registros. Usa "Agregar fila" si tienes novedades esta semana.'
+  }));
+  tbody.appendChild(tr);
+}
+
+function agregarFila(tbody, campo, valores) {
+  var vacia = tbody.querySelector('tr.vacia');
+  if (vacia) tbody.removeChild(vacia);
+
+  var tr = crear('tr');
+  campo.columnas.forEach(function (col) {
+    var td = crear('td');
+    var input = crear('input', {
+      type: 'text',
+      'data-col': col.clave,
+      placeholder: col.titulo,
+      value: valores ? (valores[col.clave] || '') : '',
+      oninput: function () { SUCIO = true; }
+    });
+    if (col.tipo === 'numero') input.setAttribute('inputmode', 'decimal');
+    td.appendChild(input);
+    tr.appendChild(td);
+  });
+
+  var acciones = crear('td', { clase: 'acciones' });
+  acciones.appendChild(crear('button', {
+    clase: 'fila', type: 'button', title: 'Quitar fila', texto: '×',
+    onclick: function () {
+      tbody.removeChild(tr);
+      if (!tbody.querySelector('tr')) filaVacia(tbody, campo);
+      SUCIO = true;
+    }
+  }));
+  tr.appendChild(acciones);
+  tbody.appendChild(tr);
+  return tr;
+}
+
+/** Lee el formulario y arma el objeto que espera apiGuardar. */
+function recolectar() {
+  var campos = {};
+
+  CAMPOS.forEach(function (campo) {
+    if (campo.tipo === 'tabla') {
+      var tbody = document.querySelector('tbody[data-tabla="' + campo.clave + '"]');
+      var filas = [];
+      if (tbody) {
+        Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (tr) {
+          if (tr.className === 'vacia') return;
+          var fila = {};
+          var algo = false;
+          Array.prototype.forEach.call(tr.querySelectorAll('input[data-col]'), function (input) {
+            var v = input.value.trim();
+            fila[input.getAttribute('data-col')] = v;
+            if (v) algo = true;
+          });
+          if (algo) filas.push(fila);
+        });
+      }
+      campos[campo.clave] = filas;
+    } else {
+      var el = document.querySelector('[data-campo="' + campo.clave + '"]');
+      campos[campo.clave] = el ? el.value.trim() : '';
+    }
+  });
+
+  var periodo = periodoSeleccionado($('selectorPeriodo'));
+  return { anio: periodo.anio, semana: periodo.semana, campos: campos };
+}
+
+/* ===================== Acciones ===================== */
+
+function guardar() {
+  var datos = recolectar();
+  $('btnGuardar').disabled = true;
+  $('estadoGuardado').textContent = 'Guardando…';
+  mostrarAviso('mensajeFormulario', '', '');
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('btnGuardar').disabled = false;
+      SUCIO = false;
+      $('estadoGuardado').textContent = '';
+      mostrarAviso('mensajeFormulario', '✔ ' + r.mensaje, 'ok');
+    })
+    .withFailureHandler(function (e) {
+      $('btnGuardar').disabled = false;
+      $('estadoGuardado').textContent = '';
+      mostrarAviso('mensajeFormulario', 'No se pudo guardar: ' + e.message, 'error');
+    })
+    .apiGuardar(datos);
+}
+
+function cambiarPeriodo() {
+  if (SUCIO && !confirm('Tienes cambios sin guardar. ¿Cambiar de semana y perderlos?')) {
+    var p = SESION.periodo;
+    $('selectorPeriodo').value = p.anio + '-' + p.semana;
+    return;
+  }
+  recargarRegistro();
+}
+
+function recargarRegistro() {
+  var periodo = periodoSeleccionado($('selectorPeriodo'));
+  pintarPeriodo(periodo.anio, periodo.semana);
+  mostrarAviso('mensajeFormulario', '', '');
+  $('estadoGuardado').textContent = 'Cargando…';
+
+  google.script.run
+    .withSuccessHandler(pintarFormulario)
+    .withFailureHandler(function (e) {
+      mostrarAviso('mensajeFormulario', e.message, 'error');
+      $('estadoGuardado').textContent = '';
+    })
+    .apiCargarRegistro(periodo.anio, periodo.semana);
+}
+
+/* ===================== Pestañas ===================== */
+
+function verPestana(cual) {
+  var esFormulario = (cual === 'formulario');
+  $('panelFormulario').classList.toggle('oculto', !esFormulario);
+  $('panelInforme').classList.toggle('oculto', esFormulario);
+  $('tabFormulario').classList.toggle('activa', esFormulario);
+  $('tabInforme').classList.toggle('activa', !esFormulario);
+}
+
+/* ===================== Informe gerencial ===================== */
+
+function generarInforme() {
+  var periodo = periodoSeleccionado($('periodoInforme'));
+  mostrarAviso('mensajeInforme', '', '');
+  $('salidaInforme').innerHTML = '<p class="cargando">Consolidando las siete áreas…</p>';
+  $('cobertura').innerHTML = '';
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('salidaInforme').innerHTML = r.html;
+      pintarCobertura(r.totalReportes, r.faltantes);
+      if (r.aviso) mostrarAviso('mensajeInforme', r.aviso, 'alerta');
+      else if (r.fuente === 'ia') {
+        mostrarAviso('mensajeInforme', 'Redactado con asistencia de IA sobre los datos reportados.', 'info');
+      }
+    })
+    .withFailureHandler(function (e) {
+      $('salidaInforme').innerHTML = '';
+      mostrarAviso('mensajeInforme', e.message, 'error');
+    })
+    .apiPrevisualizarInforme(periodo.anio, periodo.semana, true);
+}
+
+function pintarCobertura(total, faltantes) {
+  var cont = $('cobertura');
+  cont.innerHTML = '';
+  cont.appendChild(crear('span', { clase: 'chip', texto: total + ' reporte(s) recibido(s)' }));
+  (faltantes || []).forEach(function (f) {
+    cont.appendChild(crear('span', { clase: 'chip falta', texto: 'Falta: ' + f.nombre + ' · ' + f.area }));
+  });
+}
+
+function enviarInforme() {
+  var periodo = periodoSeleccionado($('periodoInforme'));
+  if (!confirm('¿Enviar el informe de esa semana al gerente por correo?')) return;
+
+  $('btnEnviar').disabled = true;
+  mostrarAviso('mensajeInforme', 'Enviando…', 'info');
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('btnEnviar').disabled = false;
+      mostrarAviso('mensajeInforme', '✔ ' + r.mensaje, 'ok');
+    })
+    .withFailureHandler(function (e) {
+      $('btnEnviar').disabled = false;
+      mostrarAviso('mensajeInforme', 'No se pudo enviar: ' + e.message, 'error');
+    })
+    .apiEnviarInforme(periodo.anio, periodo.semana);
+}
+</script>

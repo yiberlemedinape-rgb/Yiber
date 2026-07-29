@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Estilos'); ?>
+</head>
+<body>
+
+  <header class="barra">
+    <div class="marca">
+      KAESER COMPRESORES
+      <span>Informes Semanales · base de datos corporativa</span>
+    </div>
+    <div class="usuario" id="chipUsuario">
+      <b id="chipNombre">Identificando…</b>
+      <span id="chipCargo"></span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Estado de carga / errores de acceso -->
+    <div id="cargando" class="tarjeta cargando">Cargando tu formulario…</div>
+    <div id="bloqueo" class="aviso error oculto"></div>
+
+    <!-- Aplicación -->
+    <div id="app" class="oculto">
+
+      <div class="pestanas">
+        <button id="tabFormulario" class="activa" onclick="verPestana('formulario')">
+          📝 Mi reporte
+        </button>
+        <button id="tabInforme" class="oculto" onclick="verPestana('informe')">
+          📈 Informe gerencial
+        </button>
+      </div>
+
+      <!-- ============ Pestaña: formulario ============ -->
+      <section id="panelFormulario">
+        <div class="tarjeta">
+          <h2 id="tituloArea">Área</h2>
+          <p class="sub" id="descripcionArea"></p>
+
+          <div class="periodo" style="margin-top:14px">
+            <div class="dato">
+              <label>Año</label>
+              <b id="verAnio">—</b>
+            </div>
+            <div class="dato">
+              <label>N° de Semana</label>
+              <b id="verSemana">—</b>
+            </div>
+            <div class="dato crece">
+              <label>Nombre del colaborador</label>
+              <b id="verNombre">—</b>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;text-transform:uppercase;
+                            letter-spacing:.5px;color:var(--tenue);margin-bottom:4px">
+                Periodo a reportar
+              </label>
+              <select class="semana" id="selectorPeriodo" onchange="cambiarPeriodo()"></select>
+            </div>
+          </div>
+        </div>
+
+        <div id="mensajeFormulario" class="aviso oculto"></div>
+
+        <div class="tarjeta">
+          <div id="campos"></div>
+
+          <div class="acciones-pie">
+            <button class="primario" id="btnGuardar" onclick="guardar()">Guardar reporte</button>
+            <button class="secundario" onclick="recargarRegistro()">Descartar cambios</button>
+            <span id="estadoGuardado" class="cargando"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ Pestaña: informe gerencial ============ -->
+      <section id="panelInforme" class="oculto">
+        <div class="tarjeta">
+          <h2>Informe gerencial semanal</h2>
+          <p class="sub">
+            Consolida las siete áreas y arma el resumen que se envía al gerente
+            los jueves a las 5:00 p. m.
+          </p>
+
+          <div class="periodo" style="margin-top:14px">
+            <div>
+              <label style="display:block;font-size:11px;text-transform:uppercase;
+                            letter-spacing:.5px;color:var(--tenue);margin-bottom:4px">
+                Semana del informe
+              </label>
+              <select class="semana" id="periodoInforme"></select>
+            </div>
+            <button class="primario" onclick="generarInforme()">Generar vista previa</button>
+            <button class="secundario" id="btnEnviar" onclick="enviarInforme()">
+              Enviar al gerente
+            </button>
+          </div>
+
+          <div id="cobertura" class="etiquetas"></div>
+        </div>
+
+        <div id="mensajeInforme" class="aviso oculto"></div>
+        <div id="salidaInforme" class="informe">
+          <p class="cargando">Genera la vista previa para ver el informe consolidado.</p>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <?!= include('Js'); ?>
+</body>
+</html>
