@@ -12,11 +12,9 @@ gerencial los jueves a las 5:00 p. m.**
 
 ```
                  ┌─────────────────────────────────────────┐
-   Colaborador → │ Interfaz web (Apps Script + HTML)       │
-                 │  · valida el correo contra "Usuario"    │
-                 │  · precarga Año / Semana / Nombre       │
-                 │  · dibuja el formulario de SU área      │
-                 │  · NO puede tocar el informe gerencial  │
+   Colaborador → │ Interfaz web — vista según el rol        │
+ Administrador → │  colaborador  → sólo su formulario       │
+                 │  administrador→ sólo vista previa+envío  │
                  └───────────────┬─────────────────────────┘
                                  │ google.script.run
                  ┌───────────────▼─────────────────────────┐
@@ -29,7 +27,7 @@ gerencial los jueves a las 5:00 p. m.**
                  │ Google Sheets (1 hoja por área)         │
                  └───────────────┬─────────────────────────┘
                                  │ jueves 17:00 (disparador automático)
-                                 │ o menú de Sheets (sólo Administrador)
+                                 │ o a mano por el Administrador
                  ┌───────────────▼─────────────────────────┐
                  │ Informe.gs → Gemini (opcional) → Correo │
                  │  Markdown con las 5 secciones exigidas  │
@@ -67,7 +65,7 @@ o quitar un campo se hace en un solo lugar.**
 En Apps Script, **una función cuyo nombre termina en `_` es privada**: no
 aparece en el selector de **▶ Ejecutar** del editor y no puede invocarse con
 `google.script.run`. Todo el proyecto usa esa convención, así que el editor sólo
-ofrece los **13 puntos de entrada** reales:
+ofrece los **15 puntos de entrada** reales:
 
 | Función | Quién la ejecuta |
 |---|---|
@@ -75,6 +73,7 @@ ofrece los **13 puntos de entrada** reales:
 | `doGet()`, `include()` | La aplicación web |
 | `menuInicializar()`, `menuUrlWebApp()`, `menuPrevisualizar()`, `menuEnviarAhora()`, `menuInstalarDisparador()`, `menuEstado()` | El menú de la hoja |
 | `apiSesion()`, `apiCargarRegistro()`, `apiGuardar()` | El navegador vía `google.script.run` |
+| `apiPrevisualizarCorreo()`, `apiEnviarInformeGerencial()` | Ídem, pero **exigen Administrador en el servidor** |
 | `enviarInformeSemanal()` | El disparador de los jueves |
 
 Todo lo demás termina en `_` porque **espera argumentos** (área, año, semana,
@@ -244,21 +243,47 @@ reporte; y el Administrador, único que puede disparar el informe a mano.
 > **Asesores KAM**, aunque la hoja existe. Agrega a los asesores allí para que
 > puedan entrar a su formulario.
 
-### 5.2 El informe gerencial no es alcanzable desde la interfaz web
+### 5.2 Dos vistas, una por rol
 
-La interfaz **no tiene** botón, pestaña ni pantalla de informe. Pero ocultar un
-botón no es una medida de seguridad: **cualquier función de `Code.gs` es
-invocable desde el navegador** con `google.script.run.<nombre>()`, así que un
-botón escondido seguiría siendo ejecutable desde la consola del navegador.
+`apiSesion()` decide qué se muestra, y el servidor entrega **sólo los datos que
+corresponden al rol**:
 
-Por eso la protección real es que **el endpoint no existe**: en `Code.gs` no hay
-ninguna función que previsualice, genere o envíe el informe. La acción no está
-oculta — no es alcanzable. Las pruebas verifican esto explícitamente.
+| Rol | Qué recibe de `apiSesion()` | Qué ve |
+|---|---|---|
+| **Colaborador** | Su área, sus campos y su registro | Únicamente el formulario de su área |
+| **Administrador** | Destinatario, copia y estado de la IA | Únicamente el panel del informe: vista previa del correo y botón de envío |
 
-### 5.3 Quién puede ejecutarlo a mano
+El administrador **no ve ningún formulario**. Si además debe entregar su propio
+reporte semanal, se activa `CONFIG.ADMIN_TAMBIEN_REPORTA = true` en `Config.gs`
+y entonces se le muestran las dos cosas.
 
-El envío manual vive **sólo en el menú de Google Sheets**, y cada acción pasa
-por `exigirAdministrador_()`:
+> Esto importa en la práctica: si el administrador está también en la hoja
+> `Usuario` (por ejemplo, alguien de SAU que administra el sistema), con la
+> configuración por defecto **pierde el acceso a su propio formulario**. Ese
+> interruptor existe justamente para ese caso.
+
+### 5.3 Dónde vive de verdad el permiso
+
+Ocultar botones **no es seguridad**: cualquier función pública de `Code.gs` es
+invocable desde la consola del navegador con `google.script.run.<nombre>()`. Un
+colaborador podría llamar a `apiEnviarInformeGerencial` aunque no vea el botón.
+
+Por eso la barrera está en la **primera línea de cada endpoint**:
+
+```js
+function apiEnviarInformeGerencial(anio, semana) {
+  exigirAdministrador_();          // ← la barrera real
+  return enviarInforme_(...);
+}
+```
+
+Las pruebas cubren los dos lados: que un colaborador que invoque esas funciones
+directamente reciba un error **y que no se envíe ningún correo**, y —de forma
+estática sobre el código fuente— que ambas conserven esa llamada, para que nadie
+pueda quitarla sin que el banco de pruebas falle.
+
+El mismo criterio aplica al menú de Google Sheets, donde cada acción pasa por
+`exigirAdministrador_()`:
 
 - **Administrador** = correo listado en la propiedad `ADMIN_CORREOS`.
 - Si esa propiedad aún no se ha configurado, se acepta únicamente al
@@ -270,6 +295,17 @@ por `exigirAdministrador_()`:
 
 Además, con la implementación recomendada (§4.4) los colaboradores **no tienen
 acceso al libro de Sheets**, así que ni siquiera ven ese menú.
+
+### 5.4 La vista previa es el correo
+
+`construirCorreo_()` es el **único** lugar donde se arma el mensaje, y lo usan
+por igual la vista previa y el envío real. Por eso lo que el administrador ve
+—remitente, copia, asunto, cabecera de Kaeser, informe y pie— es idéntico
+carácter por carácter a lo que recibe la gerencia.
+
+No es un detalle estético: si la vista previa se armara por su cuenta, podría
+divergir del correo real sin que nadie lo notara. Una prueba compara ambos
+resultados y falla si dejan de coincidir.
 
 ---
 
@@ -346,6 +382,7 @@ Detalles que importan en la práctica:
 | `CONFIG.SEMANAS_EDITABLES` | `6` | Semanas hacia atrás que un colaborador puede corregir. |
 | `CONFIG.IA_MAX_TOKENS` | `16384` | Techo de tokens de salida de Gemini (incluye razonamiento). |
 | `CONFIG.IA_PRESUPUESTO_RAZONAMIENTO` | `1024` | Presupuesto de razonamiento. `0` lo desactiva, `-1` lo deja dinámico. |
+| `CONFIG.ADMIN_TAMBIEN_REPORTA` | `false` | Si es `true`, al administrador se le muestra además el formulario de su área. |
 | `PALABRAS_CRITICAS` / `PALABRAS_PERSONAL` | — | Vocabulario que dispara el marcado de riesgo. |
 
 ---
@@ -378,7 +415,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~105 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~150 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -391,10 +428,12 @@ malicioso).
 
 Dos bloques valen la pena por separado:
 
-- **El informe no es alcanzable desde la web** (§5.2): se verifica que las
-  funciones de informe *no existan* como endpoint, que `apiSesion` no exponga
-  permisos y que ni el HTML ni el JavaScript del cliente las mencionen. Si
-  alguien vuelve a agregar un botón, las pruebas fallan.
+- **Autorización del informe** (§5.3): que un colaborador que invoque los
+  endpoints directamente reciba un error y **no se envíe ningún correo**, y
+  —de forma estática sobre el código— que ambos endpoints conserven la llamada
+  a `exigirAdministrador_()`.
+- **Vista previa = correo enviado** (§5.4): se comparan ambos resultados y la
+  prueba falla si dejan de coincidir.
 - **Rol de Administrador** (§5.3): con y sin `ADMIN_CORREOS`, la excepción del
   propietario, insensibilidad a mayúsculas y el mensaje de error que explica
   cómo pedir acceso.
@@ -420,17 +459,25 @@ las pruebas lo detectan de inmediato.
 | Reportar mi semana | Abrir la URL de la aplicación web. Año, semana y nombre vienen precargados. |
 | Corregir una semana pasada | Cambiar el selector *Periodo a reportar* (hasta 6 semanas atrás). |
 
-**Administrador** — todo desde el menú de Google Sheets (🔒 = requiere estar en
-`ADMIN_CORREOS`):
+**Administrador** — al abrir la misma URL de la aplicación web ve el panel del
+informe en lugar del formulario:
+
+| Quiero… | Cómo |
+|---|---|
+| Ver el correo antes de mandarlo | Botón **Ver vista previa**. Muestra el mensaje tal como llegará. |
+| Enviarlo ahora | Botón **Enviar al gerente**. Pide confirmación. |
+| Enviar el de una semana anterior | Cambiar el selector *Semana del informe* (hasta 6 semanas atrás). |
+| Saber quién falta por reportar | Está en la vista previa: el anexo de cobertura al final del informe. |
+
+Y desde el menú de Google Sheets, para la configuración
+(🔒 = requiere estar en `ADMIN_CORREOS`):
 
 | Quiero… | Cómo |
 |---|---|
 | Que el informe salga solo los jueves | 🔒 **Instalar envío automático (jueves 5:00 p. m.)**. Una sola vez. |
-| Ver el informe antes del jueves | 🔒 **Previsualizar informe de esta semana**. No envía nada. |
-| Enviarlo a mano ahora | 🔒 **Enviar informe ahora (manual)**. Pide confirmación. |
-| Saber quién falta por reportar | Está en la vista previa: el anexo de cobertura al final del informe. |
 | Revisar la configuración | 🔒 **Estado de la configuración** (gerente, admins, IA, disparador). |
 | Comprobar que una columna no se rompió | 🔒 **Verificar / crear hojas**. |
+| Previsualizar o enviar sin abrir la web | 🔒 **Previsualizar informe** / 🔒 **Enviar informe ahora**. |
 
 ---
 

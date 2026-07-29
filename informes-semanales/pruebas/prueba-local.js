@@ -166,6 +166,7 @@ const ENTRADAS_PERMITIDAS = [
   'menuInicializar', 'menuUrlWebApp', 'menuPrevisualizar',
   'menuEnviarAhora', 'menuInstalarDisparador', 'menuEstado',
   'apiSesion', 'apiCargarRegistro', 'apiGuardar',
+  'apiPrevisualizarCorreo', 'apiEnviarInformeGerencial',  // sólo Administrador
   'enviarInformeSemanal'                      // disparador de los jueves
 ].sort();
 
@@ -197,6 +198,15 @@ const codeGs = fs.readFileSync(path.join(DIR, 'Code.gs'), 'utf8');
 });
 ok(publicas.indexOf('enviarInformeSemanal') >= 0,
    'el disparador de los jueves sigue siendo público');
+
+/* Los endpoints del informe son alcanzables desde el navegador por cualquiera,
+   así que la autorización tiene que estar dentro de la propia función. Se
+   verifica de forma estática para que nadie pueda quitarla sin que falle. */
+['apiPrevisualizarCorreo', 'apiEnviarInformeGerencial'].forEach(nombre => {
+  const cuerpo = (codeGs.split('function ' + nombre + '(')[1] || '').split('\nfunction ')[0];
+  ok(cuerpo.indexOf('exigirAdministrador_()') >= 0,
+     nombre + '() exige Administrador en la primera línea');
+});
 
 /* ===== 1. Semana ISO ===== */
 console.log('\n[1] Semana ISO y números');
@@ -467,19 +477,25 @@ let rechazoPeriodo = false;
 try { S.apiGuardar({ anio: 2019, semana: 5, campos: {} }); } catch (e) { rechazoPeriodo = true; }
 ok(rechazoPeriodo, 'apiGuardar rechaza semanas fuera de la ventana de corrección');
 
-/* El informe gerencial no debe ser alcanzable desde la interfaz web: no basta
-   con ocultar el botón, la función no puede existir como endpoint. */
-console.log('\n[9b] El informe no es alcanzable desde la interfaz web');
-['apiPrevisualizarInforme', 'apiEnviarInforme', 'apiCobertura', 'apiInforme'].forEach(nombre => {
-  ok(typeof S[nombre] === 'undefined', 'no existe el endpoint ' + nombre + '()');
-});
-ok(apiS.permisos === undefined, 'apiSesion ya no expone permisos de informe');
-const js = fs.readFileSync(path.join(DIR, 'Js.html'), 'utf8');
-const indexHtml = fs.readFileSync(path.join(DIR, 'Index.html'), 'utf8');
-ok(js.indexOf('apiEnviarInforme') < 0 && js.indexOf('apiPrevisualizarInforme') < 0,
-   'el cliente no invoca ninguna función de informe');
-ok(indexHtml.indexOf('Informe gerencial') < 0 && indexHtml.indexOf('Enviar al gerente') < 0,
-   'el HTML no tiene botón ni pestaña de informe');
+/* El colaborador no debe poder tocar el informe. Como los endpoints SÍ existen
+   (el administrador los usa), la barrera tiene que estar en el servidor: que la
+   interfaz oculte los botones no protege nada. */
+console.log('\n[9b] Un colaborador no puede tocar el informe gerencial');
+ok(apiS.rol === 'colaborador', 'sin ADMIN_CORREOS ni propietario, el rol es colaborador', apiS.rol);
+ok(apiS.informe === undefined, 'apiSesion no entrega datos del informe a un colaborador');
+ok(!!apiS.area, 'el colaborador sí recibe su formulario');
+
+let bloqueoPrevia = '';
+try { S.apiPrevisualizarCorreo(P.anio, P.semana); } catch (e) { bloqueoPrevia = e.message; }
+ok(bloqueoPrevia.indexOf('Administrador') >= 0,
+   'apiPrevisualizarCorreo rechaza al colaborador aunque la invoque directo', bloqueoPrevia);
+
+let bloqueoEnvio = '';
+const correoAntes = S.__correo;
+try { S.apiEnviarInformeGerencial(P.anio, P.semana); } catch (e) { bloqueoEnvio = e.message; }
+ok(bloqueoEnvio.indexOf('Administrador') >= 0,
+   'apiEnviarInformeGerencial rechaza al colaborador', bloqueoEnvio);
+ok(S.__correo === correoAntes, 'y no se envió ningún correo en el intento');
 
 /* ===== 9c. Rol de Administrador ===== */
 console.log('\n[9c] Sólo el Administrador ejecuta el envío manual');
@@ -502,7 +518,50 @@ let mensajePermiso = '';
 try { S.exigirAdministrador_(); } catch (e) { sinPermiso = true; mensajePermiso = e.message; }
 ok(sinPermiso, 'exigirAdministrador_ bloquea a quien no está en la lista');
 ok(mensajePermiso.indexOf('ADMIN_CORREOS') >= 0, 'el error explica cómo darse acceso', mensajePermiso);
+
+/* ===== 9d. Vista del Administrador ===== */
+console.log('\n[9d] Vista del Administrador en la interfaz');
+PROPS.ADMIN_CORREOS = 'yiber.medina@kaeser.com';
+PROPS.CORREO_GERENTE = 'gerencia@kaeser.com';
+PROPS.CORREO_COPIA = 'direccion@kaeser.com';
+
+const sesionAdmin = S.apiSesion();
+ok(sesionAdmin.rol === 'administrador', 'el rol pasa a administrador', sesionAdmin.rol);
+ok(sesionAdmin.area === undefined,
+   'NO se le entrega formulario (CONFIG.ADMIN_TAMBIEN_REPORTA = false)');
+ok(sesionAdmin.registro === undefined, 'ni el registro de su área');
+ok(sesionAdmin.informe.destinatario === 'gerencia@kaeser.com', 'sí recibe el destinatario');
+ok(sesionAdmin.informe.copia === 'direccion@kaeser.com', 'y los correos en copia');
+ok(sesionAdmin.usuario.cargo === 'Administrador', 'el cargo mostrado es Administrador');
+
+/* La vista previa debe ser el correo completo, no sólo el informe. */
+const previa = S.apiPrevisualizarCorreo(P.anio, P.semana);
+ok(previa.para === 'gerencia@kaeser.com', 'la vista previa indica el destinatario');
+ok(previa.asunto.indexOf('Semana 31') >= 0, 'y el asunto real', previa.asunto);
+ok(previa.html.indexOf('KAESER COMPRESORES') >= 0, 'incluye la plantilla del correo');
+ok(previa.html.indexOf('No responder a este correo') >= 0, 'incluye el pie del correo');
+ok(previa.html.indexOf('RESUMEN EJECUTIVO') >= 0, 'y el informe consolidado');
+
+/* La garantía que justifica construirCorreo_: previa y envío son el mismo correo. */
+S.apiEnviarInformeGerencial(P.anio, P.semana);
+ok(S.__correo.htmlBody === previa.html,
+   'el correo enviado es idéntico, carácter por carácter, a la vista previa');
+ok(S.__correo.subject === previa.asunto, 'mismo asunto en vista previa y envío');
+ok(S.__correo.to === previa.para, 'mismo destinatario');
+ok(S.__correo.cc === previa.cc, 'misma copia');
+
+/* Con el interruptor activado, el administrador recupera su formulario. */
+S.CONFIG.ADMIN_TAMBIEN_REPORTA = true;
+const sesionAmbos = S.apiSesion();
+ok(sesionAmbos.rol === 'administrador' && !!sesionAmbos.area,
+   'ADMIN_TAMBIEN_REPORTA = true le devuelve también el formulario',
+   sesionAmbos.area && sesionAmbos.area.nombre);
+ok(!!sesionAmbos.informe, 'y conserva el panel del informe');
+S.CONFIG.ADMIN_TAMBIEN_REPORTA = false;
+
 delete PROPS.ADMIN_CORREOS;
+delete PROPS.CORREO_GERENTE;
+delete PROPS.CORREO_COPIA;
 LIBRO.propietario = null;
 
 /* ===== 10. Respaldo sin IA ===== */

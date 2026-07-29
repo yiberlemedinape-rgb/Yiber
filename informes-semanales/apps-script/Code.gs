@@ -17,6 +17,7 @@
  *   include()                 Inserta parciales HTML en la plantilla.
  *   menu*()                   Acciones del menú; todas exigen Administrador.
  *   api*()                    Invocadas desde el HTML vía google.script.run.
+ *                             Las de informe exigen Administrador en servidor.
  *   enviarInformeSemanal()    Disparador de los jueves a las 5:00 p. m.
  *                             Es la única función segura de ejecutar desde el
  *                             editor para probar el envío de punta a punta.
@@ -75,18 +76,25 @@ function menuUrlWebApp() {
 }
 
 function menuPrevisualizar() {
-  accionAdministrador_('Vista previa del informe', function (ui) {
+  accionAdministrador_('Vista previa del correo', function (ui) {
     var p = periodoActual_();
-    var informe = construirInforme_(p.anio, p.semana, true);
-    var aviso = informe.aviso
+    var correo = construirCorreo_(p.anio, p.semana);
+    var aviso = correo.aviso
       ? '<p style="background:#fff6e0;border:1px solid #f0dca6;color:#9a6700;' +
-        'padding:8px 12px;border-radius:6px;font-size:13px">' + informe.aviso + '</p>'
+        'padding:8px 12px;border-radius:6px;font-size:13px;font-family:Segoe UI,Arial,sans-serif">' +
+        escaparHtml_(correo.aviso) + '</p>'
       : '';
+    var cabecera =
+      '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:12.5px;color:#5c6472;' +
+                  'border:1px solid #dfe3ea;border-radius:6px;padding:10px 12px;margin-bottom:10px">' +
+        '<b>Para:</b> ' + escaparHtml_(correo.para || '⚠️ falta CORREO_GERENTE') + '<br>' +
+        (correo.cc ? '<b>Copia:</b> ' + escaparHtml_(correo.cc) + '<br>' : '') +
+        '<b>Asunto:</b> ' + escaparHtml_(correo.asunto) +
+      '</div>';
     var html = HtmlService
-      .createHtmlOutput('<div style="font-family:Segoe UI,Arial,sans-serif;padding:8px">' +
-                        aviso + markdownAHtml_(informe.markdown) + '</div>')
+      .createHtmlOutput(aviso + cabecera + correo.html)
       .setWidth(900).setHeight(640);
-    ui.showModalDialog(html, 'Vista previa · ' + informe.consolidado.etiqueta);
+    ui.showModalDialog(html, 'Así lo recibirá el gerente · ' + correo.etiqueta);
   });
 }
 
@@ -160,35 +168,92 @@ function include(nombre) {
  * periodo precargado y el registro ya guardado (si existe).
  */
 function apiSesion() {
+  var esAdmin = esAdministrador_();
   var sesion = usuarioActual_();
-  if (!sesion.ok) return { ok: false, motivo: sesion.motivo };
-
-  var usuario = sesion.usuario;
   var periodo = periodoActual_();
-  var def = ESQUEMA[usuario.area];
 
-  return {
+  // Un administrador puede no estar en la hoja "Usuario" (p. ej. alguien de TI);
+  // en ese caso igual entra, sólo que sin formulario.
+  if (!esAdmin && !sesion.ok) return { ok: false, motivo: sesion.motivo };
+
+  var usuario = sesion.ok ? sesion.usuario : null;
+  var base = {
     ok: true,
+    rol: esAdmin ? 'administrador' : 'colaborador',
     usuario: {
-      nombre: usuario.nombre,
-      correo: usuario.correo,
-      cargo: usuario.cargo,
-      area: usuario.area
-    },
-    area: {
-      nombre: usuario.area,
-      icono: def.icono,
-      descripcion: def.descripcion,
-      campos: def.campos
+      nombre: usuario ? usuario.nombre : correoSesion_(),
+      correo: usuario ? usuario.correo : correoSesion_(),
+      cargo: esAdmin ? 'Administrador' : (usuario ? usuario.cargo : '')
     },
     periodo: {
       anio: periodo.anio,
       semana: periodo.semana,
       etiqueta: etiquetaSemana_(periodo.anio, periodo.semana)
     },
-    periodosEditables: ultimosPeriodos_(CONFIG.SEMANAS_EDITABLES),
-    registro: apiCargarRegistro(periodo.anio, periodo.semana)
+    periodosEditables: ultimosPeriodos_(CONFIG.SEMANAS_EDITABLES)
   };
+
+  if (esAdmin) {
+    base.informe = {
+      destinatario: correoGerente_() || '',
+      copia: correosCopia_() || '',
+      iaActiva: iaDisponible_()
+    };
+  }
+
+  // El formulario se entrega al colaborador, y al administrador sólo si se
+  // habilitó CONFIG.ADMIN_TAMBIEN_REPORTA y además está en la hoja "Usuario".
+  var mostrarFormulario = usuario && (!esAdmin || CONFIG.ADMIN_TAMBIEN_REPORTA);
+  if (mostrarFormulario) {
+    var def = ESQUEMA[usuario.area];
+    base.usuario.area = usuario.area;
+    base.area = {
+      nombre: usuario.area,
+      icono: def.icono,
+      descripcion: def.descripcion,
+      campos: def.campos
+    };
+    base.registro = apiCargarRegistro(periodo.anio, periodo.semana);
+  }
+
+  return base;
+}
+
+/**
+ * Vista previa del correo tal como lo recibirá el gerente.
+ *
+ * Sólo Administrador. La autorización se resuelve **aquí, en el servidor**:
+ * que la interfaz muestre u oculte el botón es cosmético, porque cualquiera
+ * puede invocar esta función desde la consola del navegador con
+ * `google.script.run`. `exigirAdministrador_()` es la barrera real.
+ *
+ * Devuelve el mismo objeto que usa el envío (`construirCorreo_`), así que lo
+ * que se ve es idéntico a lo que se manda.
+ */
+function apiPrevisualizarCorreo(anio, semana) {
+  exigirAdministrador_();
+  var correo = construirCorreo_(Number(anio), Number(semana));
+  return {
+    ok: true,
+    para: correo.para,
+    cc: correo.cc,
+    asunto: correo.asunto,
+    html: correo.html,
+    fuente: correo.fuente,
+    aviso: correo.aviso,
+    etiqueta: correo.etiqueta,
+    totalReportes: correo.totalReportes,
+    faltantes: correo.faltantes
+  };
+}
+
+/**
+ * Envía el informe gerencial al gerente. Sólo Administrador.
+ * Reutiliza exactamente el correo de la vista previa.
+ */
+function apiEnviarInformeGerencial(anio, semana) {
+  exigirAdministrador_();
+  return enviarInforme_(Number(anio), Number(semana));
 }
 
 /**
@@ -249,15 +314,20 @@ function apiGuardar(datos) {
 }
 
 /*
- * NOTA DE SEGURIDAD — el informe gerencial no tiene endpoint.
+ * NOTA DE SEGURIDAD — dónde vive de verdad el permiso del informe.
  *
- * Aquí NO existe ninguna función que previsualice, genere o envíe el informe.
- * Es deliberado: cualquier función de este archivo es invocable desde el
- * navegador con `google.script.run.<nombre>()`, así que esconder un botón en el
- * HTML no impediría que alguien la llamara desde la consola. Al no existir el
- * endpoint, la acción sencillamente no es alcanzable desde la interfaz.
+ * `apiPrevisualizarCorreo` y `apiEnviarInformeGerencial` existen como endpoints
+ * y por tanto son invocables desde el navegador con `google.script.run`, incluso
+ * por alguien que no vea el botón. Que la interfaz los muestre sólo al
+ * administrador es cosmético.
  *
- * El informe sale por dos caminos, y sólo por esos dos:
+ * La barrera real es la primera línea de cada una: `exigirAdministrador_()`, que
+ * compara el correo de la sesión de Google contra ADMIN_CORREOS. Un colaborador
+ * que invoque cualquiera de las dos desde la consola recibe un error y nada más
+ * ocurre. Las pruebas verifican exactamente ese escenario.
+ *
+ * El informe sale por tres caminos, todos autorizados:
  *   1. Automático: disparador `enviarInformeSemanal` (jueves 5:00 p. m.).
- *   2. Manual: menú de Google Sheets, restringido con `exigirAdministrador_()`.
+ *   2. Interfaz web: panel del administrador.
+ *   3. Menú de Google Sheets, también con `exigirAdministrador_()`.
  */

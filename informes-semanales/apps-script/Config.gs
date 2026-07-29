@@ -63,10 +63,15 @@ var CONFIG = {
   IA_MAX_TOKENS: 16384,
 
   /**
-   * El informe gerencial NO se opera desde la interfaz web: sale solo por el
-   * disparador de los jueves y, de forma manual, únicamente desde el menú de
-   * Google Sheets y sólo para los correos de ADMIN_CORREOS.
+   * Qué ve el Administrador en la interfaz web.
+   *
+   * false (por defecto): sólo el panel del informe gerencial — vista previa del
+   *   correo y botón de envío. No se le muestra ningún formulario.
+   * true: además de ese panel, se le muestra el formulario de su área, si está
+   *   registrado en la hoja "Usuario". Útil cuando la persona que administra
+   *   también debe entregar su propio reporte semanal.
    */
+  ADMIN_TAMBIEN_REPORTA: false,
 
   /** Asunto del correo semanal. */
   ASUNTO_INFORME: 'Informe Gerencial Semanal — Kaeser Compresores'

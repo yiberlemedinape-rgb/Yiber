@@ -24,17 +24,58 @@
     <div id="bloqueo" class="aviso error oculto"></div>
 
     <!--
-      Aplicación.
+      Aplicación. La interfaz sirve una de dos vistas según el rol que devuelve
+      apiSesion():
 
-      La interfaz web sirve exclusivamente para que cada colaborador registre su
-      propio reporte. El informe gerencial NO se opera desde aquí: no hay botón
-      y tampoco existe el endpoint en el servidor (ver la nota de seguridad en
-      Code.gs). Sale solo los jueves a las 5:00 p. m. y, de forma manual, sólo
-      desde el menú de Google Sheets con rol de Administrador.
+        · colaborador   → sólo el formulario de su área.
+        · administrador → sólo el panel del informe gerencial (vista previa del
+                          correo + envío). El formulario se le muestra además
+                          únicamente si CONFIG.ADMIN_TAMBIEN_REPORTA está en true.
+
+      Mostrar u ocultar el panel es cosmético: el permiso real lo aplica el
+      servidor con exigirAdministrador_() (ver la nota en Code.gs).
     -->
     <div id="app" class="oculto">
 
-      <section id="panelFormulario">
+      <!-- ============ Panel del Administrador ============ -->
+      <section id="panelAdmin" class="oculto">
+        <div class="tarjeta">
+          <h2>📈 Informe gerencial semanal</h2>
+          <p class="sub">
+            Consolida las siete áreas y arma el correo que recibe la gerencia
+            los jueves a las 5:00 p. m. La vista previa muestra el mensaje
+            exactamente como llegará.
+          </p>
+
+          <div class="periodo" style="margin-top:14px">
+            <div>
+              <label style="display:block;font-size:11px;text-transform:uppercase;
+                            letter-spacing:.5px;color:var(--tenue);margin-bottom:4px">
+                Semana del informe
+              </label>
+              <select class="semana" id="periodoInforme" onchange="limpiarVistaPrevia()"></select>
+            </div>
+            <button class="secundario" id="btnPrevisualizar" onclick="previsualizarCorreo()">
+              Ver vista previa
+            </button>
+            <button class="primario" id="btnEnviar" onclick="enviarInformeGerencial()">
+              Enviar al gerente
+            </button>
+          </div>
+
+          <div class="destinatario" id="destinatario"></div>
+        </div>
+
+        <div id="mensajeInforme" class="aviso oculto"></div>
+
+        <div id="vistaPrevia" class="oculto">
+          <div class="sobre-cabecera" id="sobreCabecera"></div>
+          <div class="sobre-cuerpo" id="sobreCuerpo"></div>
+        </div>
+      </section>
+
+      <!-- ============ Formulario del colaborador ============ -->
+      <section id="panelFormulario" class="oculto">
         <div class="tarjeta">
           <h2 id="tituloArea">Área</h2>
           <p class="sub" id="descripcionArea"></p>

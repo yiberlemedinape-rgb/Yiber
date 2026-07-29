@@ -142,6 +142,26 @@
 
   .cargando { color: var(--tenue); font-size: 13.5px; }
 
+  /* ---------- Panel del administrador: vista previa del correo ---------- */
+  .destinatario {
+    margin-top: 14px; font-size: 13px; color: var(--tenue);
+    border-top: 1px solid var(--borde); padding-top: 12px;
+  }
+  .destinatario b { color: var(--texto); }
+  .destinatario .falta { color: var(--rojo); font-weight: 600; }
+
+  .sobre-cabecera {
+    background: #fff; border: 1px solid var(--borde); border-bottom: 0;
+    border-radius: 10px 10px 0 0; padding: 14px 18px; font-size: 13px; color: var(--tenue);
+  }
+  .sobre-cabecera .fila { display: flex; gap: 8px; padding: 2px 0; }
+  .sobre-cabecera .etq { min-width: 62px; color: var(--tenue); }
+  .sobre-cabecera .val { color: var(--texto); font-weight: 600; word-break: break-word; }
+  .sobre-cuerpo {
+    border: 1px solid var(--borde); border-radius: 0 0 10px 10px;
+    overflow: hidden; background: #f4f6fa;
+  }
+
   @media (max-width: 640px) {
     header.barra { padding: 12px 14px; }
     .usuario { text-align: left; }

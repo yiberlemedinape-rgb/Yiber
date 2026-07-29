@@ -61,30 +61,67 @@ function bloquear(motivo) {
 function iniciar(sesion) {
   if (!sesion || !sesion.ok) { bloquear(sesion ? sesion.motivo : 'Respuesta vacía del servidor.'); return; }
 
+  // Un administrador puede no tener área (no está en la hoja "Usuario"), así que
+  // CAMPOS se llena más abajo, sólo cuando el servidor entrega un formulario.
   SESION = sesion;
-  CAMPOS = sesion.area.campos;
+  CAMPOS = [];
 
   $('cargando').classList.add('oculto');
   $('app').classList.remove('oculto');
 
   $('chipNombre').textContent = sesion.usuario.nombre;
-  $('chipCargo').textContent = sesion.usuario.cargo + ' · ' + sesion.usuario.correo;
+  $('chipCargo').textContent =
+    (sesion.usuario.cargo ? sesion.usuario.cargo + ' · ' : '') + sesion.usuario.correo;
 
-  $('tituloArea').textContent = sesion.area.icono + '  ' + sesion.area.nombre;
-  $('descripcionArea').textContent = sesion.area.descripcion || '';
+  // Panel del administrador: vista previa del correo y envío.
+  if (sesion.rol === 'administrador') {
+    $('panelAdmin').classList.remove('oculto');
+    llenarPeriodos($('periodoInforme'), sesion.periodosEditables);
+    pintarDestinatario(sesion.informe);
+  }
 
-  $('verNombre').textContent = sesion.usuario.nombre;
-
-  llenarPeriodos($('selectorPeriodo'), sesion.periodosEditables);
-
-  pintarPeriodo(sesion.periodo.anio, sesion.periodo.semana);
-  pintarFormulario(sesion.registro);
+  // Formulario: siempre para el colaborador; para el administrador sólo si el
+  // servidor lo autorizó (CONFIG.ADMIN_TAMBIEN_REPORTA).
+  if (sesion.area) {
+    CAMPOS = sesion.area.campos;
+    $('panelFormulario').classList.remove('oculto');
+    $('tituloArea').textContent = sesion.area.icono + '  ' + sesion.area.nombre;
+    $('descripcionArea').textContent = sesion.area.descripcion || '';
+    $('verNombre').textContent = sesion.usuario.nombre;
+    llenarPeriodos($('selectorPeriodo'), sesion.periodosEditables);
+    pintarPeriodo(sesion.periodo.anio, sesion.periodo.semana);
+    pintarFormulario(sesion.registro);
+  }
 
   window.addEventListener('beforeunload', function (e) {
     if (!SUCIO) return;
     e.preventDefault();
     e.returnValue = '';
   });
+}
+
+/** Muestra a quién irá el correo y avisa si falta configurarlo. */
+function pintarDestinatario(informe) {
+  var cont = $('destinatario');
+  cont.innerHTML = '';
+
+  if (!informe.destinatario) {
+    cont.appendChild(crear('div', {
+      clase: 'falta',
+      texto: '⚠️ Falta configurar la propiedad de script CORREO_GERENTE. ' +
+             'El envío fallará hasta que se registre el correo del gerente.'
+    }));
+    $('btnEnviar').disabled = true;
+    return;
+  }
+
+  cont.appendChild(crear('div', { html: 'Se enviará a <b>' + informe.destinatario + '</b>' +
+    (informe.copia ? ', con copia a <b>' + informe.copia + '</b>' : '') + '.' }));
+  cont.appendChild(crear('div', {
+    texto: informe.iaActiva
+      ? 'Redacción asistida por Gemini activa.'
+      : 'Redacción asistida inactiva: se enviará el informe automático.'
+  }));
 }
 
 function llenarPeriodos(select, periodos) {
@@ -295,10 +332,81 @@ function recargarRegistro() {
     .apiCargarRegistro(periodo.anio, periodo.semana);
 }
 
-/*
- * El informe gerencial no se opera desde esta interfaz: no hay pantalla, ni
- * botón, ni llamada al servidor. Sale automáticamente los jueves a las
- * 5:00 p. m. y, de forma manual, sólo desde el menú de Google Sheets con rol
- * de Administrador.
+/* ===================== Informe gerencial (sólo Administrador) =====================
+ *
+ * Ocultar estos controles a un colaborador es cosmético: el servidor exige rol
+ * de administrador en `apiPrevisualizarCorreo` y `apiEnviarInformeGerencial`.
  */
+
+function limpiarVistaPrevia() {
+  $('vistaPrevia').classList.add('oculto');
+  mostrarAviso('mensajeInforme', '', '');
+}
+
+function previsualizarCorreo() {
+  var periodo = periodoSeleccionado($('periodoInforme'));
+  $('btnPrevisualizar').disabled = true;
+  mostrarAviso('mensajeInforme', 'Consolidando las siete áreas…', 'info');
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('btnPrevisualizar').disabled = false;
+      pintarSobre(r);
+      if (r.aviso) mostrarAviso('mensajeInforme', r.aviso, 'alerta');
+      else if (r.fuente === 'ia') {
+        mostrarAviso('mensajeInforme',
+          'Redactado con Gemini sobre los ' + r.totalReportes + ' reporte(s) de la semana.', 'info');
+      } else {
+        mostrarAviso('mensajeInforme',
+          'Informe automático sobre los ' + r.totalReportes + ' reporte(s) de la semana.', 'info');
+      }
+    })
+    .withFailureHandler(function (e) {
+      $('btnPrevisualizar').disabled = false;
+      limpiarVistaPrevia();
+      mostrarAviso('mensajeInforme', e.message, 'error');
+    })
+    .apiPrevisualizarCorreo(periodo.anio, periodo.semana);
+}
+
+/** Dibuja el "sobre" (Para / Copia / Asunto) y el cuerpo real del correo. */
+function pintarSobre(r) {
+  var cabecera = $('sobreCabecera');
+  cabecera.innerHTML = '';
+
+  var fila = function (etiqueta, valor) {
+    var f = crear('div', { clase: 'fila' });
+    f.appendChild(crear('span', { clase: 'etq', texto: etiqueta }));
+    f.appendChild(crear('span', { clase: 'val', texto: valor }));
+    return f;
+  };
+  cabecera.appendChild(fila('Para:', r.para || '⚠️ sin configurar'));
+  if (r.cc) cabecera.appendChild(fila('Copia:', r.cc));
+  cabecera.appendChild(fila('Asunto:', r.asunto));
+
+  // El HTML lo genera el servidor y todo el contenido del usuario pasa por
+  // escaparHtml_ antes de llegar aquí.
+  $('sobreCuerpo').innerHTML = r.html;
+  $('vistaPrevia').classList.remove('oculto');
+}
+
+function enviarInformeGerencial() {
+  var periodo = periodoSeleccionado($('periodoInforme'));
+  var texto = $('periodoInforme').options[$('periodoInforme').selectedIndex].textContent;
+  if (!confirm('¿Enviar al gerente el informe de la ' + texto + '?')) return;
+
+  $('btnEnviar').disabled = true;
+  mostrarAviso('mensajeInforme', 'Enviando…', 'info');
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('btnEnviar').disabled = false;
+      mostrarAviso('mensajeInforme', '✔ ' + r.mensaje, 'ok');
+    })
+    .withFailureHandler(function (e) {
+      $('btnEnviar').disabled = false;
+      mostrarAviso('mensajeInforme', 'No se pudo enviar: ' + e.message, 'error');
+    })
+    .apiEnviarInformeGerencial(periodo.anio, periodo.semana);
+}
 </script>

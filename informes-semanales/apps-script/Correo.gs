@@ -191,40 +191,65 @@ function plantillaCorreo_(cuerpoHtml, etiqueta) {
     '</div>';
 }
 
-/* ===================== Envío ===================== */
+/* ===================== Construcción y envío ===================== */
+
+/**
+ * Arma el correo completo de una semana SIN enviarlo.
+ *
+ * Es el único lugar donde se construye el mensaje, y tanto la vista previa como
+ * el envío real lo usan. Esa es la razón de que exista: garantiza que **lo que
+ * el administrador ve en la vista previa es idéntico, carácter por carácter, a
+ * lo que recibirá el gerente**. Si la vista previa se armara por su cuenta,
+ * podría divergir del correo sin que nadie lo notara.
+ *
+ * @return {Object} { para, cc, asunto, html, texto, fuente, aviso, etiqueta, ... }
+ */
+function construirCorreo_(anio, semana) {
+  var informe = construirInforme_(anio, semana, true);
+  var etiqueta = informe.consolidado.etiqueta;
+
+  return {
+    para: correoGerente_(),
+    cc: correosCopia_(),
+    asunto: CONFIG.ASUNTO_INFORME + ' — ' + etiqueta,
+    html: plantillaCorreo_(markdownAHtml_(informe.markdown), etiqueta),
+    texto: informe.markdown,
+    fuente: informe.fuente,
+    aviso: informe.aviso,
+    etiqueta: etiqueta,
+    totalReportes: informe.consolidado.totalReportes,
+    faltantes: informe.consolidado.faltantes
+  };
+}
 
 /**
  * Construye y envía el informe de una semana concreta.
  * @return {Object} { ok, mensaje, fuente }
  */
 function enviarInforme_(anio, semana) {
-  var destinatario = correoGerente_();
-  if (!destinatario) {
+  var correo = construirCorreo_(anio, semana);
+
+  if (!correo.para) {
     throw new Error('Falta la propiedad de script "' + CONFIG.PROP_CORREO_GERENTE +
                     '" con el correo del gerente.');
   }
 
-  var informe = construirInforme_(anio, semana, true);
-  var etiqueta = informe.consolidado.etiqueta;
-  var html = plantillaCorreo_(markdownAHtml_(informe.markdown), etiqueta);
-
   var opciones = {
-    to: destinatario,
-    subject: CONFIG.ASUNTO_INFORME + ' — ' + etiqueta,
-    body: informe.markdown,
-    htmlBody: html,
+    to: correo.para,
+    subject: correo.asunto,
+    body: correo.texto,
+    htmlBody: correo.html,
     name: 'Informes Semanales Kaeser'
   };
-  var copia = correosCopia_();
-  if (copia) opciones.cc = copia;
+  if (correo.cc) opciones.cc = correo.cc;
 
   MailApp.sendEmail(opciones);
 
   return {
     ok: true,
-    fuente: informe.fuente,
-    mensaje: 'Informe de la ' + etiqueta + ' enviado a ' + destinatario +
-             (copia ? ' (copia: ' + copia + ')' : '') + '.'
+    fuente: correo.fuente,
+    mensaje: 'Informe de la ' + correo.etiqueta + ' enviado a ' + correo.para +
+             (correo.cc ? ' (copia: ' + correo.cc + ')' : '') + '.'
   };
 }
 
