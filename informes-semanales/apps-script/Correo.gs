@@ -197,14 +197,14 @@ function plantillaCorreo_(cuerpoHtml, etiqueta) {
  * Construye y envía el informe de una semana concreta.
  * @return {Object} { ok, mensaje, fuente }
  */
-function enviarInforme(anio, semana) {
+function enviarInforme_(anio, semana) {
   var destinatario = correoGerente_();
   if (!destinatario) {
     throw new Error('Falta la propiedad de script "' + CONFIG.PROP_CORREO_GERENTE +
                     '" con el correo del gerente.');
   }
 
-  var informe = construirInforme(anio, semana, true);
+  var informe = construirInforme_(anio, semana, true);
   var etiqueta = informe.consolidado.etiqueta;
   var html = plantillaCorreo_(markdownAHtml_(informe.markdown), etiqueta);
 
@@ -233,9 +233,9 @@ function enviarInforme(anio, semana) {
  * Envía siempre la semana ISO en curso.
  */
 function enviarInformeSemanal() {
-  var periodo = periodoActual();
+  var periodo = periodoActual_();
   try {
-    var r = enviarInforme(periodo.anio, periodo.semana);
+    var r = enviarInforme_(periodo.anio, periodo.semana);
     console.log(r.mensaje + ' Fuente: ' + r.fuente + '.');
   } catch (e) {
     console.error('Fallo el envío automático: ' + e.message);
@@ -253,7 +253,7 @@ function enviarInformeSemanal() {
 /* ===================== Disparadores ===================== */
 
 /** Elimina los disparadores existentes del envío semanal. */
-function eliminarDisparadores() {
+function eliminarDisparadores_() {
   var triggers = ScriptApp.getProjectTriggers();
   var borrados = 0;
   for (var i = 0; i < triggers.length; i++) {
@@ -269,8 +269,8 @@ function eliminarDisparadores() {
  * Instala (idempotente) el disparador de los jueves a las 5:00 p. m.
  * La hora se interpreta en la zona horaria del proyecto (America/Bogota).
  */
-function instalarDisparadores() {
-  eliminarDisparadores();
+function instalarDisparadores_() {
+  eliminarDisparadores_();
   ScriptApp.newTrigger(HANDLER_INFORME)
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.THURSDAY)

@@ -30,11 +30,32 @@ function indiceColumna_(letra) {
   return n;
 }
 
-/** Devuelve la definición del área o lanza un error claro. */
+/**
+ * Devuelve la definición del área o lanza un error accionable.
+ *
+ * El mensaje distingue los tres casos que se dan en la práctica, porque cada
+ * uno se corrige en un lugar distinto:
+ *   - Sin argumento: alguien ejecutó una función interna desde el editor.
+ *   - Cargo sin traducir: falta un alias en ALIAS_CARGOS.
+ *   - Nombre mal escrito: no coincide con ninguna clave del ESQUEMA.
+ */
 function areaOError_(area) {
   var def = ESQUEMA[area];
-  if (!def) throw new Error('Área desconocida: "' + area + '".');
-  return def;
+  if (def) return def;
+
+  if (area === undefined || area === null || area === '') {
+    throw new Error(
+      'Se llamó a una función interna sin indicar el área. Esto ocurre al ' +
+      'ejecutar una función del proyecto directamente desde el editor de Apps ' +
+      'Script: esas funciones esperan argumentos que el editor no puede pasar. ' +
+      'Usa el menú "📊 Informes Semanales" de la hoja de cálculo o la interfaz ' +
+      'web, que son los puntos de entrada reales.');
+  }
+
+  throw new Error(
+    'Área desconocida: "' + area + '". Las áreas válidas son: ' +
+    ORDEN_AREAS.join(', ') + '. Si es el cargo de alguien en la hoja "' +
+    CONFIG.HOJA_USUARIOS + '", agrégalo a ALIAS_CARGOS en Config.gs.');
 }
 
 /** Hoja del área (la crea con encabezados si no existe). */
@@ -164,7 +185,7 @@ function buscarFila_(hoja, anio, semana, nombre) {
 }
 
 /** Registro de un colaborador para una semana. Devuelve null si no existe. */
-function leerRegistro(area, anio, semana, nombre) {
+function leerRegistro_(area, anio, semana, nombre) {
   var hoja = hojaDeArea_(area);
   var fila = buscarFila_(hoja, anio, semana, nombre);
   if (fila < 0) return null;
@@ -174,7 +195,7 @@ function leerRegistro(area, anio, semana, nombre) {
 }
 
 /** Todos los registros de un área para una semana. */
-function leerSemanaArea(area, anio, semana) {
+function leerSemanaArea_(area, anio, semana) {
   var hoja = libro_().getSheetByName(areaOError_(area).hoja);
   if (!hoja) return [];
 
@@ -202,7 +223,7 @@ function leerSemanaArea(area, anio, semana) {
  * @param {Object} datos   { anio, semana, nombre, campos: {clave: valor|filas} }
  * @return {Object}        { fila, creado }
  */
-function guardarRegistro(area, datos) {
+function guardarRegistro_(area, datos) {
   var def = areaOError_(area);
   var hoja = hojaDeArea_(area);
 
@@ -251,7 +272,7 @@ function guardarRegistro(area, datos) {
     candado.releaseLock();
   }
 
-  registrarKpis(area, anio, semana, nombre, datos);
+  registrarKpis_(area, anio, semana, nombre, datos);
   return resultado;
 }
 
@@ -285,7 +306,7 @@ function crearHojaArea_(area) {
  * Devuelve un informe legible de lo que encontró: es la forma rápida de
  * detectar que alguien renombró una columna en Sheets y rompió el mapeo.
  */
-function inicializarHojas() {
+function inicializarHojas_() {
   var lineas = [];
 
   for (var a = 0; a < ORDEN_AREAS.length; a++) {

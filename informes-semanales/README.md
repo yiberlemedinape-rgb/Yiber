@@ -62,6 +62,34 @@ o quitar un campo se hace en un solo lugar.**
 | `Index.html`, `Estilos.html`, `Js.html` | Interfaz web dinámica. |
 | `pruebas/prueba-local.js` | Banco de pruebas bajo Node con dobles de los servicios de Google. |
 
+### 2.1 Convención de visibilidad — qué se puede ejecutar y qué no
+
+En Apps Script, **una función cuyo nombre termina en `_` es privada**: no
+aparece en el selector de **▶ Ejecutar** del editor y no puede invocarse con
+`google.script.run`. Todo el proyecto usa esa convención, así que el editor sólo
+ofrece los **13 puntos de entrada** reales:
+
+| Función | Quién la ejecuta |
+|---|---|
+| `onOpen()` | Google Sheets, al abrir el libro |
+| `doGet()`, `include()` | La aplicación web |
+| `menuInicializar()`, `menuUrlWebApp()`, `menuPrevisualizar()`, `menuEnviarAhora()`, `menuInstalarDisparador()`, `menuEstado()` | El menú de la hoja |
+| `apiSesion()`, `apiCargarRegistro()`, `apiGuardar()` | El navegador vía `google.script.run` |
+| `enviarInformeSemanal()` | El disparador de los jueves |
+
+Todo lo demás termina en `_` porque **espera argumentos** (área, año, semana,
+nombre) que el editor no tiene cómo suministrar. Ejecutar una de esas funciones
+a mano produce errores del tipo `Área desconocida: "undefined"`.
+
+> ✅ **La única función segura de ejecutar desde el editor para probar el
+> circuito completo es `enviarInformeSemanal`**: no lleva argumentos, toma la
+> semana en curso y manda el correo de verdad. Para lo demás, usa el menú
+> **📊 Informes Semanales**.
+
+Una prueba automática congela esa lista: si alguien agrega una función pública
+nueva, el banco de pruebas falla y obliga a decidir si es un punto de entrada o
+si le faltó el `_`.
+
 ---
 
 ## 3. Modelo de datos
@@ -403,3 +431,60 @@ las pruebas lo detectan de inmediato.
 | Saber quién falta por reportar | Está en la vista previa: el anexo de cobertura al final del informe. |
 | Revisar la configuración | 🔒 **Estado de la configuración** (gerente, admins, IA, disparador). |
 | Comprobar que una columna no se rompió | 🔒 **Verificar / crear hojas**. |
+
+---
+
+## 10. Solución de problemas
+
+### `SyntaxError: Unexpected token '<', línea 1`
+
+El editor está leyendo HTML como si fuera JavaScript. Dos causas:
+
+1. **Un archivo HTML se creó como Script** y quedó en `.gs`. Se corrige
+   borrándolo y creándolo de nuevo con `+ → HTML` (ver §4.1).
+2. **El contenido de un `.html` quedó pegado dentro de un `.gs`.** Para
+   ubicarlo: cada archivo `.gs` de este proyecto lleva **su propio nombre en la
+   línea 2**. Si `Ia.gs` no dice `* Ia.gs` en la línea 2, ahí está el error.
+
+### `Área desconocida: "undefined"`
+
+Se ejecutó una función interna desde el botón **▶ Ejecutar** del editor. Esas
+funciones esperan argumentos que el editor no puede pasar, así que reciben
+`undefined`.
+
+Cómo reconocerlo en el registro de ejecuciones: **la traza no tiene una función
+que la llamara encima**. Si el error viniera del uso normal, arriba aparecerían
+`apiCargarRegistro` y `apiSesion`.
+
+```
+areaOError_    @ Datos.gs      ← el error
+hojaDeArea_    @ Datos.gs
+leerRegistro_  @ Datos.gs      ← nada la llamó: la ejecutó el editor
+```
+
+No es un fallo del sistema: la interfaz web y el menú funcionan con normalidad.
+Desde la versión actual, esas funciones son privadas y **ya no aparecen en el
+selector del editor**. Usa el menú **📊 Informes Semanales** o, si quieres
+probar el envío completo, ejecuta `enviarInformeSemanal`.
+
+### `No fue posible identificar tu cuenta de Google`
+
+La implementación web no está como *Ejecutar como: Yo* + *Acceso: dominio*
+(§4.4), o se está entrando con una cuenta que no es `@kaeser.com`.
+
+### El correo no llegó el jueves
+
+Revisa en orden, desde **🔒 Estado de la configuración**:
+
+1. ¿Dice `Envío automático: instalado`? Si no, falta el paso §4.5.
+2. ¿`CORREO_GERENTE` está configurado?
+3. Mira **Ejecuciones** en el editor: si el disparador falló, el propio sistema
+   envía el motivo a `ADMIN_CORREOS`.
+4. Cuota de Gmail: el correo sale desde la cuenta que instaló el disparador.
+
+### El informe salió sin análisis de IA
+
+Es el comportamiento previsto ante cualquier fallo externo: se envía el informe
+determinista con toda la información. El motivo aparece en el aviso ámbar de
+**🔒 Previsualizar informe de esta semana** — clave ausente, cuota agotada,
+bloqueo de seguridad o red caída.

@@ -27,7 +27,7 @@ function hojaKpi_() {
  * Calcula las métricas de un reporte a partir del ESQUEMA.
  * @return {Array<{metrica: string, valor: number}>}
  */
-function calcularKpis(area, datos) {
+function calcularKpis_(area, datos) {
   var def = areaOError_(area);
   var salida = [];
 
@@ -80,8 +80,8 @@ function calcularKpis(area, datos) {
  * Reemplaza las métricas de (año, semana, área, nombre) por las recién
  * calculadas. Guardar dos veces la misma semana no duplica filas.
  */
-function registrarKpis(area, anio, semana, nombre, datos) {
-  var metricas = calcularKpis(area, datos);
+function registrarKpis_(area, anio, semana, nombre, datos) {
+  var metricas = calcularKpis_(area, datos);
   var hoja = hojaKpi_();
 
   var candado = LockService.getDocumentLock();
@@ -121,7 +121,7 @@ function borrarKpisDe_(hoja, anio, semana, area, nombre) {
 }
 
 /** Todas las métricas de una semana, agrupadas por área. */
-function kpisDeSemana(anio, semana) {
+function kpisDeSemana_(anio, semana) {
   var hoja = libro_().getSheetByName(CONFIG.HOJA_KPI);
   if (!hoja || hoja.getLastRow() < 2) return {};
 

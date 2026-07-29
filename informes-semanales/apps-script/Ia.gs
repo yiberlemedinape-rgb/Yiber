@@ -8,7 +8,7 @@
  *
  * Se activa sólo si existe la propiedad de script GEMINI_API_KEY.
  * Si no existe, falla la red, la API devuelve error, el prompt es bloqueado o
- * la respuesta llega vacía, `construirInforme` cae automáticamente al redactor
+ * la respuesta llega vacía, `construirInforme_` cae automáticamente al redactor
  * determinista de Informe.gs: el correo del jueves nunca se queda sin enviar
  * por una dependencia externa.
  *
@@ -32,7 +32,7 @@ function apiKey_() {
 }
 
 /** ¿Está habilitada la redacción asistida? */
-function iaDisponible() {
+function iaDisponible_() {
   return apiKey_().length > 0;
 }
 
@@ -87,7 +87,7 @@ function datosParaIa_(consolidado) {
     if (lista.length) salida.areas[area] = lista;
   }
 
-  salida.metricas = kpisDeSemana(consolidado.anio, consolidado.semana);
+  salida.metricas = kpisDeSemana_(consolidado.anio, consolidado.semana);
   return salida;
 }
 

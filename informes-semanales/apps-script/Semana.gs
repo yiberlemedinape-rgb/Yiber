@@ -33,7 +33,7 @@ function juevesIso_(fecha) {
 }
 
 /** Número de semana ISO 8601 (1..53). */
-function numeroSemanaIso(fecha) {
+function numeroSemanaIso_(fecha) {
   var jueves = juevesIso_(fecha);
   var primeroEnero = new Date(jueves.getFullYear(), 0, 1);
   var dias = Math.round((jueves - primeroEnero) / 86400000);
@@ -41,18 +41,18 @@ function numeroSemanaIso(fecha) {
 }
 
 /** Año ISO (puede diferir del año calendario a fin/inicio de año). */
-function anioIso(fecha) {
+function anioIso_(fecha) {
   return juevesIso_(fecha).getFullYear();
 }
 
 /** Periodo ISO actual: { anio, semana }. */
-function periodoActual() {
+function periodoActual_() {
   var hoy = ahora_();
-  return { anio: anioIso(hoy), semana: numeroSemanaIso(hoy) };
+  return { anio: anioIso_(hoy), semana: numeroSemanaIso_(hoy) };
 }
 
 /** Lunes y domingo (fechas) de una semana ISO dada. */
-function rangoSemana(anio, semana) {
+function rangoSemana_(anio, semana) {
   // El 4 de enero siempre cae en la semana ISO 1.
   var cuatroEnero = new Date(anio, 0, 4);
   var diaIso = cuatroEnero.getDay() === 0 ? 7 : cuatroEnero.getDay();
@@ -62,8 +62,8 @@ function rangoSemana(anio, semana) {
 }
 
 /** Etiqueta legible: "Semana 31 · 28 jul – 03 ago 2026". */
-function etiquetaSemana(anio, semana) {
-  var r = rangoSemana(anio, semana);
+function etiquetaSemana_(anio, semana) {
+  var r = rangoSemana_(anio, semana);
   var f = function (d) {
     return Utilities.formatDate(d, CONFIG.ZONA_HORARIA, 'dd MMM')
       .replace('.', '').toLowerCase();
@@ -75,16 +75,16 @@ function etiquetaSemana(anio, semana) {
  * Últimos N periodos ISO hacia atrás desde el actual (incluido).
  * Se usa para permitir correcciones de semanas anteriores.
  */
-function ultimosPeriodos(cantidad) {
+function ultimosPeriodos_(cantidad) {
   var lista = [];
   var d = ahora_();
   for (var i = 0; i < cantidad; i++) {
-    var anio = anioIso(d);
-    var semana = numeroSemanaIso(d);
+    var anio = anioIso_(d);
+    var semana = numeroSemanaIso_(d);
     lista.push({
       anio: anio,
       semana: semana,
-      etiqueta: etiquetaSemana(anio, semana)
+      etiqueta: etiquetaSemana_(anio, semana)
     });
     d = sumarDias_(d, -7);
   }

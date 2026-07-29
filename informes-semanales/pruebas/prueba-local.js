@@ -152,12 +152,58 @@ fs.readdirSync(DIR).sort().forEach(nombre => {
 ok(fs.readdirSync(DIR).filter(n => n.endsWith('.gs')).length === 9, '9 archivos .gs');
 ok(fs.readdirSync(DIR).filter(n => n.endsWith('.html')).length === 3, '3 archivos .html');
 
+/* ===== 0b. Superficie pública =====
+   En Apps Script una función que NO termina en "_" aparece en el selector de
+   "▶ Ejecutar" del editor y es invocable con google.script.run. Ejecutar por
+   error una función interna (que espera argumentos) produce fallos como
+   `Área desconocida: "undefined"`. Esta prueba congela la lista de funciones
+   públicas: si alguien agrega una, tiene que decidir conscientemente si es un
+   punto de entrada o si le falta el "_". */
+console.log('\n[0b] Superficie pública del proyecto');
+const ENTRADAS_PERMITIDAS = [
+  'onOpen',                                   // disparador simple de Sheets
+  'doGet', 'include',                         // aplicación web
+  'menuInicializar', 'menuUrlWebApp', 'menuPrevisualizar',
+  'menuEnviarAhora', 'menuInstalarDisparador', 'menuEstado',
+  'apiSesion', 'apiCargarRegistro', 'apiGuardar',
+  'enviarInformeSemanal'                      // disparador de los jueves
+].sort();
+
+const publicas = [];
+fs.readdirSync(DIR).filter(n => n.endsWith('.gs')).forEach(archivo => {
+  const contenido = fs.readFileSync(path.join(DIR, archivo), 'utf8');
+  const re = /^function\s+([A-Za-z0-9_$]+)\s*\(/gm;
+  let m;
+  while ((m = re.exec(contenido)) !== null) {
+    if (!m[1].endsWith('_')) publicas.push(m[1]);
+  }
+});
+publicas.sort();
+
+ok(JSON.stringify(publicas) === JSON.stringify(ENTRADAS_PERMITIDAS),
+   'sólo son públicos los ' + ENTRADAS_PERMITIDAS.length + ' puntos de entrada previstos',
+   publicas.filter(f => ENTRADAS_PERMITIDAS.indexOf(f) < 0));
+
+/* Las funciones que la interfaz web invoca por nombre NO pueden ser privadas:
+   google.script.run no alcanza a las que terminan en "_". */
+['apiSesion', 'apiCargarRegistro', 'apiGuardar'].forEach(f => {
+  ok(publicas.indexOf(f) >= 0, f + ' sigue siendo alcanzable desde la interfaz');
+});
+/* Lo mismo para el disparador y las llamadas del menú, que se registran por nombre. */
+const codeGs = fs.readFileSync(path.join(DIR, 'Code.gs'), 'utf8');
+(codeGs.match(/addItem\('[^']*',\s*'([A-Za-z0-9_]+)'\)/g) || []).forEach(linea => {
+  const nombre = linea.match(/'([A-Za-z0-9_]+)'\)$/)[1];
+  ok(publicas.indexOf(nombre) >= 0, 'el menú puede invocar ' + nombre + '()');
+});
+ok(publicas.indexOf('enviarInformeSemanal') >= 0,
+   'el disparador de los jueves sigue siendo público');
+
 /* ===== 1. Semana ISO ===== */
 console.log('\n[1] Semana ISO y números');
-ok(S.numeroSemanaIso(new Date(2026, 0, 1)) === 1, '01/01/2026 → semana 1');
-ok(S.numeroSemanaIso(new Date(2026, 6, 29)) === 31, '29/07/2026 → semana 31', S.numeroSemanaIso(new Date(2026, 6, 29)));
-ok(S.anioIso(new Date(2027, 0, 1)) === 2026, '01/01/2027 pertenece al año ISO 2026', S.anioIso(new Date(2027, 0, 1)));
-const rango = S.rangoSemana(2026, 31);
+ok(S.numeroSemanaIso_(new Date(2026, 0, 1)) === 1, '01/01/2026 → semana 1');
+ok(S.numeroSemanaIso_(new Date(2026, 6, 29)) === 31, '29/07/2026 → semana 31', S.numeroSemanaIso_(new Date(2026, 6, 29)));
+ok(S.anioIso_(new Date(2027, 0, 1)) === 2026, '01/01/2027 pertenece al año ISO 2026', S.anioIso_(new Date(2027, 0, 1)));
+const rango = S.rangoSemana_(2026, 31);
 ok(rango.inicio.getDate() === 27 && rango.inicio.getMonth() === 6, 'semana 31 arranca el lunes 27/07', rango.inicio.toDateString());
 ok(S.aNumero_('1.500.000') === 1500000, '"1.500.000" → 1500000', S.aNumero_('1.500.000'));
 ok(S.aNumero_('95,8 %') === 95.8, '"95,8 %" → 95.8', S.aNumero_('95,8 %'));
@@ -168,7 +214,7 @@ ok(S.aNumero_('sin datos') === null, 'texto sin dígitos → null');
 
 /* ===== 2. Inicialización ===== */
 console.log('\n[2] Inicialización de hojas');
-const informeInit = S.inicializarHojas();
+const informeInit = S.inicializarHojas_();
 ok(informeInit.split('\n').length >= 9, 'reporta las 7 áreas + Usuario + KPI_Datos');
 ok(!!LIBRO.getSheetByName('SAU, Renta, CDR'), 'crea la hoja con coma en el nombre');
 
@@ -185,18 +231,32 @@ const hojaU = LIBRO.getSheetByName('Usuario');
 ].forEach(f => hojaU.appendRow(f));
 
 console.log('\n[3] Resolución de cargos y sesión');
-ok(S.areaDeCargo('SAU') === 'SAU, Renta, CDR', 'alias "SAU"');
-ok(S.areaDeCargo('Asesores CAN') === 'Asesores KAM', 'alias "Asesores CAN" → Asesores KAM');
-ok(S.areaDeCargo('gestion comercial') === 'Gestión Comercial', 'sin tildes');
-ok(S.areaDeCargo('Contabilidad') === null, 'cargo desconocido → null');
-const sesion = S.usuarioActual();
+ok(S.areaDeCargo_('SAU') === 'SAU, Renta, CDR', 'alias "SAU"');
+ok(S.areaDeCargo_('Asesores CAN') === 'Asesores KAM', 'alias "Asesores CAN" → Asesores KAM');
+ok(S.areaDeCargo_('gestion comercial') === 'Gestión Comercial', 'sin tildes');
+ok(S.areaDeCargo_('Contabilidad') === null, 'cargo desconocido → null');
+const sesion = S.usuarioActual_();
 ok(sesion.ok && sesion.usuario.area === 'SAU, Renta, CDR', 'usuario de sesión resuelto', sesion);
+
+/* ===== 3b. Mensajes de error accionables ===== */
+console.log('\n[3b] Mensajes de error accionables');
+let errSinArea = '';
+try { S.areaOError_(undefined); } catch (e) { errSinArea = e.message; }
+ok(errSinArea.indexOf('directamente desde el editor') >= 0,
+   'llamar sin área explica que se ejecutó una función interna desde el editor', errSinArea);
+ok(errSinArea.indexOf('undefined') < 0,
+   'el mensaje ya no expone un "undefined" críptico');
+let errAreaMala = '';
+try { S.areaOError_('Contabilidad'); } catch (e) { errAreaMala = e.message; }
+ok(errAreaMala.indexOf('Contabilidad') >= 0 && errAreaMala.indexOf('ALIAS_CARGOS') >= 0,
+   'un área inexistente indica dónde corregirla', errAreaMala);
+ok(errAreaMala.indexOf('Soporte Técnico') >= 0, 'y enumera las áreas válidas');
 
 /* ===== 4. Guardado / lectura ===== */
 console.log('\n[4] Guardado, upsert y round-trip de tablas');
 const P = { anio: 2026, semana: 31 };
 
-S.guardarRegistro('SAU, Renta, CDR', {
+S.guardarRegistro_('SAU, Renta, CDR', {
   anio: P.anio, semana: P.semana, nombre: 'Yiber Medina',
   campos: {
     novedadesPersonal: 'Equipo completo. Incapacidad de 3 días de un técnico en Cali.',
@@ -215,7 +275,7 @@ S.guardarRegistro('SAU, Renta, CDR', {
   }
 });
 
-const leido = S.leerRegistro('SAU, Renta, CDR', P.anio, P.semana, 'Yiber Medina');
+const leido = S.leerRegistro_('SAU, Renta, CDR', P.anio, P.semana, 'Yiber Medina');
 ok(!!leido, 'el registro se recupera');
 ok(leido.campos.equiposDetenidos.filas.length === 1, 'la tabla vuelve con 1 fila');
 ok(leido.campos.equiposDetenidos.filas[0].estado === 'Detenido / crítico',
@@ -227,19 +287,19 @@ ok(leido.campos.serviciosUtility.valor === '38', 'campo simple intacto');
 
 const hojaSau = LIBRO.getSheetByName('SAU, Renta, CDR');
 const filasAntes = hojaSau.getLastRow();
-S.guardarRegistro('SAU, Renta, CDR', {
+S.guardarRegistro_('SAU, Renta, CDR', {
   anio: P.anio, semana: P.semana, nombre: 'Yiber Medina',
   campos: { serviciosUtility: '41', serviciosTaller: [{ estado: 'Ingresados', cantidad: '15' }] }
 });
 ok(hojaSau.getLastRow() === filasAntes, 'guardar dos veces NO duplica la fila',
    { antes: filasAntes, despues: hojaSau.getLastRow() });
-ok(S.leerRegistro('SAU, Renta, CDR', P.anio, P.semana, 'Yiber Medina').campos.serviciosUtility.valor === '41',
+ok(S.leerRegistro_('SAU, Renta, CDR', P.anio, P.semana, 'Yiber Medina').campos.serviciosUtility.valor === '41',
    'la segunda escritura sobrescribe');
 
 /* ===== 5. KPI ===== */
 console.log('\n[5] KPI_Datos');
 const hojaKpi = LIBRO.getSheetByName('KPI_Datos');
-const kpisSau = S.kpisDeSemana(P.anio, P.semana)['SAU, Renta, CDR'] || [];
+const kpisSau = S.kpisDeSemana_(P.anio, P.semana)['SAU, Renta, CDR'] || [];
 ok(kpisSau.some(k => k.metrica === 'Servicios Utility' && k.valor === 41),
    'Servicios Utility = 41 (valor actualizado)', kpisSau);
 ok(kpisSau.filter(k => k.metrica === 'Servicios Utility').length === 1,
@@ -251,7 +311,7 @@ ok(kpisSau.some(k => k.metrica === 'Taller — Ingresados' && k.valor === 15),
 console.log('\n[6] Consolidación multi-área');
 /* La interfaz siempre envía TODOS los campos; el guardado parcial del test
    anterior borró las tablas de SAU a propósito. Se restauran antes de consolidar. */
-S.guardarRegistro('SAU, Renta, CDR', {
+S.guardarRegistro_('SAU, Renta, CDR', {
   anio: P.anio, semana: P.semana, nombre: 'Yiber Medina',
   campos: {
     novedadesPersonal: 'Equipo completo. Incapacidad de 3 días de un técnico en Cali.',
@@ -265,7 +325,7 @@ S.guardarRegistro('SAU, Renta, CDR', {
     equiposMasUnMes: [{ equipo: 'EMR-2210', cliente: 'Bavaria', observacion: 'Repuesto en tránsito' }]
   }
 });
-S.guardarRegistro('DPA', {
+S.guardarRegistro_('DPA', {
   anio: P.anio, semana: P.semana, nombre: 'Leidy Johanna Monsalve',
   campos: {
     novedadesPersonal: 'Sin novedades.',
@@ -282,7 +342,7 @@ S.guardarRegistro('DPA', {
     demorasCoordinador: [{ coordinador: 'Juan Norato', oficina: 'Bogotá', osDemoradas: '4' }]
   }
 });
-S.guardarRegistro('Gestión Comercial', {
+S.guardarRegistro_('Gestión Comercial', {
   anio: P.anio, semana: P.semana, nombre: 'Carlos Alberto Arbeláez',
   campos: {
     ordenesPorSucursal: [{ sucursal: 'Bogotá', valorRecibido: '1.250.000.000' },
@@ -295,7 +355,7 @@ S.guardarRegistro('Gestión Comercial', {
     negociacionesAltoImpacto: 'Negociación con Cerrejón en revisión de precios.'
   }
 });
-S.guardarRegistro('Soporte Técnico', {
+S.guardarRegistro_('Soporte Técnico', {
   anio: P.anio, semana: P.semana, nombre: 'Edilfonso Vaca',
   campos: {
     equiposDetenidos: [{ cliente: 'Ecopetrol', equipo: 'EMR-7781', falla: 'Sensor de vibración',
@@ -306,7 +366,7 @@ S.guardarRegistro('Soporte Técnico', {
     centroMonitoreo: 'Se activaron 5 alarmas remotas.'
   }
 });
-S.guardarRegistro('Desarrollo Personal', {
+S.guardarRegistro_('Desarrollo Personal', {
   anio: P.anio, semana: P.semana, nombre: 'Jairo Atehortua',
   campos: {
     gestionVacantes: [{ zona: 'Cali', cargo: 'Técnico de servicio', estado: 'Terna en entrevista' },
@@ -314,7 +374,7 @@ S.guardarRegistro('Desarrollo Personal', {
     entrenamientos: 'Curso de Sigma Control 2 para 12 técnicos.'
   }
 });
-S.guardarRegistro('Asesores KAM', {
+S.guardarRegistro_('Asesores KAM', {
   anio: P.anio, semana: P.semana, nombre: 'Ana Gómez',
   campos: {
     negociacionesCurso: [
@@ -326,7 +386,7 @@ S.guardarRegistro('Asesores KAM', {
   }
 });
 
-S.guardarRegistro('Directores', {
+S.guardarRegistro_('Directores', {
   anio: P.anio, semana: P.semana, nombre: 'Luis Rodriguez',
   campos: {
     novedadesPersonal: 'Zona centro sin novedades de personal.',
@@ -341,20 +401,20 @@ S.guardarRegistro('Directores', {
   }
 });
 
-const consolidado = S.consolidarSemana(P.anio, P.semana);
+const consolidado = S.consolidarSemana_(P.anio, P.semana);
 ok(consolidado.totalReportes === 7, '7 reportes consolidados', consolidado.totalReportes);
 ok(consolidado.faltantes.length === 1 && consolidado.faltantes[0].nombre === 'Andrés Camilo Peña',
    '1 pendiente de envío (Andrés Camilo Peña)', consolidado.faltantes.map(f => f.nombre));
 
 /* Columna G de Directores: Métrica | Valor | Observación */
-const regDir = S.leerRegistro('Directores', P.anio, P.semana, 'Luis Rodriguez');
+const regDir = S.leerRegistro_('Directores', P.anio, P.semana, 'Luis Rodriguez');
 const metricasDir = regDir.campos.metricasClave.filas;
 ok(metricasDir.length === 2, 'métricas clave con 2 filas');
 ok(metricasDir[0].metrica === 'Facturación acumulada' &&
    metricasDir[0].valor === '3.900.000.000' &&
    metricasDir[0].observacion === '92% de la meta del mes',
    'la fila conserva Métrica / Valor / Observación', metricasDir[0]);
-const kpisDir = S.kpisDeSemana(P.anio, P.semana)['Directores'] || [];
+const kpisDir = S.kpisDeSemana_(P.anio, P.semana)['Directores'] || [];
 ok(kpisDir.some(k => k.metrica === 'Facturación acumulada' && k.valor === 3900000000),
    'la métrica nombrada se vuelca a KPI_Datos y ya es graficable',
    kpisDir.map(k => k.metrica));
@@ -447,15 +507,15 @@ LIBRO.propietario = null;
 
 /* ===== 10. Respaldo sin IA ===== */
 console.log('\n[10] Respaldo cuando la IA no está disponible');
-ok(S.iaDisponible() === false, 'sin clave, la IA está inactiva');
-const conRespaldo = S.construirInforme(P.anio, P.semana, true);
+ok(S.iaDisponible_() === false, 'sin clave, la IA está inactiva');
+const conRespaldo = S.construirInforme_(P.anio, P.semana, true);
 ok(conRespaldo.fuente === 'datos', 'cae al informe determinista sin API key');
 ok(conRespaldo.aviso.indexOf('GEMINI_API_KEY') >= 0, 'explica por qué', conRespaldo.aviso);
 
 /* ===== 11. Integración con la API de Gemini ===== */
 console.log('\n[11] API de Gemini (gemini-2.5-flash)');
 PROPS.GEMINI_API_KEY = 'clave-de-prueba';
-ok(S.iaDisponible() === true, 'con clave, la IA se activa');
+ok(S.iaDisponible_() === true, 'con clave, la IA se activa');
 ok(S.modeloIa_() === 'gemini-2.5-flash', 'modelo por defecto gemini-2.5-flash', S.modeloIa_());
 PROPS.MODELO_IA = 'models/gemini-2.5-flash';
 ok(S.modeloIa_() === 'gemini-2.5-flash', 'se tolera el prefijo "models/"', S.modeloIa_());
@@ -479,7 +539,7 @@ FETCH = (url, opciones) => {
     usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 120 }
   });
 };
-const conIa = S.construirInforme(P.anio, P.semana, true);
+const conIa = S.construirInforme_(P.anio, P.semana, true);
 ok(conIa.fuente === 'ia', 'usa la redacción de Gemini cuando responde bien');
 ok(conIa.markdown.indexOf('La semana cerró estable.') >= 0, 'incorpora el texto del modelo');
 ok(conIa.markdown.indexOf('razonamiento interno') < 0, 'descarta las partes marcadas como thought');
@@ -497,19 +557,19 @@ ok(peticion.cuerpo.generationConfig.thinkingConfig.thinkingBudget === 1024,
 
 /* 11.2 Error HTTP */
 FETCH = () => respuestaHttp(429, { error: { code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED' } });
-const con429 = S.construirInforme(P.anio, P.semana, true);
+const con429 = S.construirInforme_(P.anio, P.semana, true);
 ok(con429.fuente === 'datos', 'un 429 cae al informe determinista');
 ok(con429.aviso.indexOf('Quota exceeded') >= 0, 'muestra el mensaje real de la API', con429.aviso);
 
 /* 11.3 Prompt bloqueado */
 FETCH = () => respuestaHttp(200, { promptFeedback: { blockReason: 'SAFETY' } });
-const conBloqueo = S.construirInforme(P.anio, P.semana, true);
+const conBloqueo = S.construirInforme_(P.anio, P.semana, true);
 ok(conBloqueo.fuente === 'datos', 'un bloqueo de seguridad cae al determinista');
 ok(conBloqueo.aviso.indexOf('filtros de seguridad') >= 0, 'traduce el motivo del bloqueo', conBloqueo.aviso);
 
 /* 11.4 Sin texto por agotar tokens (caso típico de los modelos 2.5) */
 FETCH = () => respuestaHttp(200, { candidates: [{ content: { parts: [] }, finishReason: 'MAX_TOKENS' }] });
-const sinTexto = S.construirInforme(P.anio, P.semana, true);
+const sinTexto = S.construirInforme_(P.anio, P.semana, true);
 ok(sinTexto.fuente === 'datos', 'una respuesta vacía cae al determinista');
 ok(sinTexto.aviso.indexOf('tokens de salida') >= 0, 'explica que se agotaron los tokens', sinTexto.aviso);
 
@@ -518,19 +578,19 @@ FETCH = () => respuestaHttp(200, {
   candidates: [{ content: { parts: [{ text: '## 📋 RESUMEN EJECUTIVO\n\nTexto parcial' }] },
                  finishReason: 'MAX_TOKENS' }]
 });
-const truncado = S.construirInforme(P.anio, P.semana, true);
+const truncado = S.construirInforme_(P.anio, P.semana, true);
 ok(truncado.fuente === 'ia', 'una respuesta truncada con texto sí se aprovecha');
 ok(truncado.markdown.indexOf('se truncó por límite de tokens') >= 0, 'avisa que viene truncada');
 
 /* 11.6 Caída de red */
 FETCH = () => { throw new Error('DNS timeout'); };
-const sinRed = S.construirInforme(P.anio, P.semana, true);
+const sinRed = S.construirInforme_(P.anio, P.semana, true);
 ok(sinRed.fuente === 'datos', 'una caída de red cae al determinista');
 ok(sinRed.aviso.indexOf('DNS timeout') >= 0, 'reporta el error de red', sinRed.aviso);
 
 /* 11.7 El correo se arma igual con el respaldo */
 PROPS.CORREO_GERENTE = 'gerencia@kaeser.com';
-const envio = S.enviarInforme(P.anio, P.semana);
+const envio = S.enviarInforme_(P.anio, P.semana);
 ok(envio.ok && envio.fuente === 'datos', 'el correo sale aunque la IA esté caída');
 ok(S.__correo.to === 'gerencia@kaeser.com', 'destinatario correcto');
 ok(S.__correo.subject.indexOf('Semana 31') >= 0, 'asunto con la semana', S.__correo.subject);

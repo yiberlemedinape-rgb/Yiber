@@ -17,7 +17,7 @@ function libro_() {
 }
 
 /** Lee la hoja "Usuario" completa. Devuelve [{cargo, nombre, correo, area}]. */
-function listarUsuarios() {
+function listarUsuarios_() {
   var hoja = libro_().getSheetByName(CONFIG.HOJA_USUARIOS);
   if (!hoja) throw new Error('No existe la hoja "' + CONFIG.HOJA_USUARIOS + '".');
 
@@ -36,7 +36,7 @@ function listarUsuarios() {
       cargo: cargo,
       nombre: nombre,
       correo: correo,
-      area: areaDeCargo(cargo)
+      area: areaDeCargo_(cargo)
     });
   }
   return usuarios;
@@ -46,7 +46,7 @@ function listarUsuarios() {
  * Traduce el "Cargo" escrito en la hoja Usuario al nombre de área del ESQUEMA.
  * Devuelve null si el cargo no corresponde a ningún formulario.
  */
-function areaDeCargo(cargo) {
+function areaDeCargo_(cargo) {
   var normal = normalizar_(cargo);
   if (!normal) return null;
 
@@ -78,7 +78,7 @@ function correoSesion_() {
  * Resuelve al usuario autenticado contra la hoja "Usuario".
  * Devuelve { ok, motivo?, usuario? }.
  */
-function usuarioActual() {
+function usuarioActual_() {
   var correo = correoSesion_();
   if (!correo) {
     return {
@@ -90,7 +90,7 @@ function usuarioActual() {
     };
   }
 
-  var usuarios = listarUsuarios();
+  var usuarios = listarUsuarios_();
   for (var i = 0; i < usuarios.length; i++) {
     if (usuarios[i].correo === correo) {
       var u = usuarios[i];

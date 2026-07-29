@@ -20,20 +20,20 @@
  * Reúne todos los reportes de la semana más la lista de quien no reportó.
  * @return {Object} { anio, semana, etiqueta, areas, faltantes, totalReportes }
  */
-function consolidarSemana(anio, semana) {
+function consolidarSemana_(anio, semana) {
   var areas = {};
   var total = 0;
 
   for (var i = 0; i < ORDEN_AREAS.length; i++) {
     var area = ORDEN_AREAS[i];
-    var registros = leerSemanaArea(area, anio, semana);
+    var registros = leerSemanaArea_(area, anio, semana);
     areas[area] = registros;
     total += registros.length;
   }
 
   // Quién debía reportar y no lo hizo.
   var faltantes = [];
-  var usuarios = listarUsuarios();
+  var usuarios = listarUsuarios_();
   for (var u = 0; u < usuarios.length; u++) {
     var usuario = usuarios[u];
     if (!usuario.area) continue;
@@ -50,7 +50,7 @@ function consolidarSemana(anio, semana) {
   return {
     anio: anio,
     semana: semana,
-    etiqueta: etiquetaSemana(anio, semana),
+    etiqueta: etiquetaSemana_(anio, semana),
     generado: Utilities.formatDate(ahora_(), CONFIG.ZONA_HORARIA, "dd/MM/yyyy HH:mm"),
     areas: areas,
     faltantes: faltantes,
@@ -140,7 +140,7 @@ var PALABRAS_PERSONAL = ['incapacidad', 'renuncia', 'retiro', 'ausent', 'acciden
  * Respeta la estructura obligatoria de cinco secciones.
  */
 function informeDeterminista_(consolidado) {
-  var kpis = kpisDeSemana(consolidado.anio, consolidado.semana);
+  var kpis = kpisDeSemana_(consolidado.anio, consolidado.semana);
   var L = [];
 
   L.push('# Informe Gerencial Semanal — Kaeser Compresores');
@@ -641,8 +641,8 @@ function bloqueCobertura_(consolidado) {
  * @param {boolean} usarIa  Intenta redactar con el modelo si hay API key.
  * @return {Object} { markdown, fuente, consolidado, aviso }
  */
-function construirInforme(anio, semana, usarIa) {
-  var consolidado = consolidarSemana(anio, semana);
+function construirInforme_(anio, semana, usarIa) {
+  var consolidado = consolidarSemana_(anio, semana);
   var respaldo = informeDeterminista_(consolidado);
 
   if (usarIa === false) {

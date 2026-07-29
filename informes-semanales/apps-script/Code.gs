@@ -1,10 +1,25 @@
 /**
  * Code.gs
  * ---------------------------------------------------------------------------
- * Puntos de entrada del proyecto:
- *   - onOpen()  : menú dentro de Google Sheets.
- *   - doGet()   : sirve la interfaz web (Index.html).
- *   - api*()    : funciones invocadas desde el HTML vía google.script.run.
+ * Puntos de entrada del proyecto.
+ *
+ * CONVENCIÓN DE VISIBILIDAD — importante al trabajar en el editor:
+ *
+ * En Apps Script, una función cuyo nombre termina en "_" es privada: no aparece
+ * en el selector de "▶ Ejecutar" del editor y no puede invocarse con
+ * google.script.run. Todo el proyecto usa esa convención, de modo que sólo las
+ * funciones de abajo son ejecutables directamente. Las demás esperan argumentos
+ * (área, año, semana...) que el editor no tiene cómo pasar, y ejecutarlas a
+ * mano produce errores como `Área desconocida: "undefined"`.
+ *
+ *   onOpen()                  Menú dentro de Google Sheets (disparador simple).
+ *   doGet()                   Sirve la interfaz web (Index.html).
+ *   include()                 Inserta parciales HTML en la plantilla.
+ *   menu*()                   Acciones del menú; todas exigen Administrador.
+ *   api*()                    Invocadas desde el HTML vía google.script.run.
+ *   enviarInformeSemanal()    Disparador de los jueves a las 5:00 p. m.
+ *                             Es la única función segura de ejecutar desde el
+ *                             editor para probar el envío de punta a punta.
  *
  * Todas las funciones `api*` validan el usuario contra la hoja "Usuario" antes
  * de tocar datos: la interfaz nunca decide sola qué puede hacer alguien.
@@ -48,7 +63,7 @@ function accionAdministrador_(titulo, fn) {
 
 function menuInicializar() {
   accionAdministrador_('Verificación de hojas', function (ui) {
-    ui.alert('Verificación de hojas', inicializarHojas(), ui.ButtonSet.OK);
+    ui.alert('Verificación de hojas', inicializarHojas_(), ui.ButtonSet.OK);
   });
 }
 
@@ -61,8 +76,8 @@ function menuUrlWebApp() {
 
 function menuPrevisualizar() {
   accionAdministrador_('Vista previa del informe', function (ui) {
-    var p = periodoActual();
-    var informe = construirInforme(p.anio, p.semana, true);
+    var p = periodoActual_();
+    var informe = construirInforme_(p.anio, p.semana, true);
     var aviso = informe.aviso
       ? '<p style="background:#fff6e0;border:1px solid #f0dca6;color:#9a6700;' +
         'padding:8px 12px;border-radius:6px;font-size:13px">' + informe.aviso + '</p>'
@@ -77,18 +92,18 @@ function menuPrevisualizar() {
 
 function menuEnviarAhora() {
   accionAdministrador_('Enviar informe gerencial', function (ui) {
-    var p = periodoActual();
+    var p = periodoActual_();
     var respuesta = ui.alert('Enviar informe gerencial',
-      '¿Enviar ahora el informe de la ' + etiquetaSemana(p.anio, p.semana) + ' al gerente?',
+      '¿Enviar ahora el informe de la ' + etiquetaSemana_(p.anio, p.semana) + ' al gerente?',
       ui.ButtonSet.YES_NO);
     if (respuesta !== ui.Button.YES) return;
-    ui.alert(enviarInforme(p.anio, p.semana).mensaje);
+    ui.alert(enviarInforme_(p.anio, p.semana).mensaje);
   });
 }
 
 function menuInstalarDisparador() {
   accionAdministrador_('Envío automático', function (ui) {
-    ui.alert('Envío automático', instalarDisparadores(), ui.ButtonSet.OK);
+    ui.alert('Envío automático', instalarDisparadores_(), ui.ButtonSet.OK);
   });
 }
 
@@ -101,7 +116,7 @@ function menuEstado() {
       'Copias: ' + (props.getProperty(CONFIG.PROP_COPIA_INFORME) || '—'),
       'Administradores: ' + (admins.length ? admins.join(', ')
         : '⚠️ sin configurar (sólo el propietario del libro puede operar)'),
-      'Redacción con IA: ' + (iaDisponible()
+      'Redacción con IA: ' + (iaDisponible_()
         ? 'activa (' + modeloIa_() + ')' : 'inactiva (informe automático)'),
       'Zona horaria: ' + CONFIG.ZONA_HORARIA,
       ''
@@ -112,8 +127,8 @@ function menuEstado() {
     });
     if (triggers.length) {
       lineas.push('Envío automático: instalado (jueves 5:00 p. m., ' + CONFIG.ZONA_HORARIA + ')');
-      var p = periodoActual();
-      lineas.push('Próximo informe: ' + etiquetaSemana(p.anio, p.semana));
+      var p = periodoActual_();
+      lineas.push('Próximo informe: ' + etiquetaSemana_(p.anio, p.semana));
     } else {
       lineas.push('Envío automático: ⚠️ NO instalado — el informe no saldrá el jueves.');
     }
@@ -145,11 +160,11 @@ function include(nombre) {
  * periodo precargado y el registro ya guardado (si existe).
  */
 function apiSesion() {
-  var sesion = usuarioActual();
+  var sesion = usuarioActual_();
   if (!sesion.ok) return { ok: false, motivo: sesion.motivo };
 
   var usuario = sesion.usuario;
-  var periodo = periodoActual();
+  var periodo = periodoActual_();
   var def = ESQUEMA[usuario.area];
 
   return {
@@ -169,9 +184,9 @@ function apiSesion() {
     periodo: {
       anio: periodo.anio,
       semana: periodo.semana,
-      etiqueta: etiquetaSemana(periodo.anio, periodo.semana)
+      etiqueta: etiquetaSemana_(periodo.anio, periodo.semana)
     },
-    periodosEditables: ultimosPeriodos(CONFIG.SEMANAS_EDITABLES),
+    periodosEditables: ultimosPeriodos_(CONFIG.SEMANAS_EDITABLES),
     registro: apiCargarRegistro(periodo.anio, periodo.semana)
   };
 }
@@ -181,11 +196,11 @@ function apiSesion() {
  * Devuelve null si aún no ha reportado esa semana.
  */
 function apiCargarRegistro(anio, semana) {
-  var sesion = usuarioActual();
+  var sesion = usuarioActual_();
   if (!sesion.ok) throw new Error(sesion.motivo);
 
   var usuario = sesion.usuario;
-  var registro = leerRegistro(usuario.area, Number(anio), Number(semana), usuario.nombre);
+  var registro = leerRegistro_(usuario.area, Number(anio), Number(semana), usuario.nombre);
   if (!registro) return null;
 
   // Se aplana a { clave: valor | filas } para que el formulario lo consuma directo.
@@ -202,7 +217,7 @@ function apiCargarRegistro(anio, semana) {
  * El nombre y el área NUNCA vienen del cliente: se toman de la hoja "Usuario".
  */
 function apiGuardar(datos) {
-  var sesion = usuarioActual();
+  var sesion = usuarioActual_();
   if (!sesion.ok) throw new Error(sesion.motivo);
   var usuario = sesion.usuario;
 
@@ -211,14 +226,14 @@ function apiGuardar(datos) {
   if (!anio || !semana) throw new Error('Periodo inválido.');
 
   // Sólo se permite escribir dentro de la ventana de corrección.
-  var permitidos = ultimosPeriodos(CONFIG.SEMANAS_EDITABLES);
+  var permitidos = ultimosPeriodos_(CONFIG.SEMANAS_EDITABLES);
   var valido = permitidos.some(function (p) { return p.anio === anio && p.semana === semana; });
   if (!valido) {
     throw new Error('Sólo puedes reportar la semana actual o las ' +
                     (CONFIG.SEMANAS_EDITABLES - 1) + ' anteriores.');
   }
 
-  var resultado = guardarRegistro(usuario.area, {
+  var resultado = guardarRegistro_(usuario.area, {
     anio: anio,
     semana: semana,
     nombre: usuario.nombre,
@@ -229,7 +244,7 @@ function apiGuardar(datos) {
     ok: true,
     creado: resultado.creado,
     mensaje: (resultado.creado ? 'Reporte registrado' : 'Reporte actualizado') +
-             ' para la ' + etiquetaSemana(anio, semana) + '.'
+             ' para la ' + etiquetaSemana_(anio, semana) + '.'
   };
 }
 
