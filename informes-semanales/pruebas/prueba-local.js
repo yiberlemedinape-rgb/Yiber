@@ -133,6 +133,25 @@ function ok(cond, etiqueta, extra) {
   else { fallos++; console.log('  ✘ ' + etiqueta + (extra !== undefined ? ' → ' + JSON.stringify(extra) : '')); }
 }
 
+/* ===== 0. Integridad de los archivos =====
+   El README documenta que cada .gs lleva su nombre en la línea 2, para que al
+   cargarlos a mano en Apps Script se pueda verificar que ningún contenido
+   quedó en el archivo equivocado (síntoma típico: Unexpected token '<'). */
+console.log('\n[0] Integridad de los archivos');
+fs.readdirSync(DIR).sort().forEach(nombre => {
+  const contenido = fs.readFileSync(path.join(DIR, nombre), 'utf8');
+  if (nombre === 'appsscript.json') return;
+  if (nombre.endsWith('.gs')) {
+    const linea2 = contenido.split('\n')[1] || '';
+    ok(contenido.startsWith('/**') && linea2.trim() === '* ' + nombre,
+       nombre + ' declara su nombre en la línea 2', linea2.trim());
+  } else {
+    ok(contenido.trim().charAt(0) === '<', nombre + ' es HTML');
+  }
+});
+ok(fs.readdirSync(DIR).filter(n => n.endsWith('.gs')).length === 9, '9 archivos .gs');
+ok(fs.readdirSync(DIR).filter(n => n.endsWith('.html')).length === 3, '3 archivos .html');
+
 /* ===== 1. Semana ISO ===== */
 console.log('\n[1] Semana ISO y números');
 ok(S.numeroSemanaIso(new Date(2026, 0, 1)) === 1, '01/01/2026 → semana 1');

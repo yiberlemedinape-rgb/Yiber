@@ -114,10 +114,33 @@ métricas anteriores, nunca las duplica.
 
 ### 4.1 Cargar el código
 
-1. Abre el libro `Informes_Semanales` en Google Sheets.
-2. **Extensiones → Apps Script**.
-3. Copia el contenido de `apps-script/` (o usa `clasp`: copia
-   `.clasp.json.example` a `.clasp.json`, pon el `scriptId` y ejecuta `clasp push`).
+**Opción recomendada — `clasp`** (no se puede equivocar de tipo de archivo):
+
+```bash
+cp .clasp.json.example .clasp.json     # y pon dentro el scriptId real
+clasp push
+```
+
+**Opción manual** — Abre el libro `Informes_Semanales` → **Extensiones → Apps
+Script** y crea los 13 archivos. Deben quedar exactamente así:
+
+| Tipo | Archivos |
+|---|---|
+| **Script** (9) | `Code.gs` · `Config.gs` · `Correo.gs` · `Datos.gs` · `Ia.gs` · `Informe.gs` · `Kpis.gs` · `Semana.gs` · `Usuarios.gs` |
+| **HTML** (3) | `Estilos.html` · `Index.html` · `Js.html` |
+| Manifiesto | `appsscript.json` (se muestra activando *Mostrar el archivo de manifiesto* en Configuración) |
+
+> ⚠️ **Los archivos HTML se crean con `+ → HTML`, no con `+ → Script`,** y al
+> nombrarlos se escribe `Estilos`, `Index`, `Js` **sin la extensión** (Apps
+> Script agrega `.html` solo). Si se crean como Script quedan en `.gs` y el
+> editor falla con `SyntaxError: Unexpected token '<', línea 1`: está
+> intentando leer HTML como JavaScript.
+
+**Verificación rápida de que cada contenido quedó en su archivo:** todo archivo
+`.gs` de este proyecto lleva **su propio nombre en la línea 2** de la cabecera.
+Si `Ia.gs` no dice `* Ia.gs` en la línea 2, ahí se pegó otra cosa. El mismo
+error (`Unexpected token '<'`) aparece cuando el contenido de un `.html` termina
+pegado dentro de un `.gs`.
 
 ### 4.2 Configurar propiedades del script
 
