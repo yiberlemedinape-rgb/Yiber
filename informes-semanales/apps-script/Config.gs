@@ -44,18 +44,23 @@ var CONFIG = {
   PROP_CORREO_GERENTE: 'CORREO_GERENTE',
   PROP_COPIA_INFORME: 'CORREO_COPIA',
   PROP_ADMINS: 'ADMIN_CORREOS',
-  PROP_API_KEY: 'ANTHROPIC_API_KEY',
+  PROP_API_KEY: 'GEMINI_API_KEY',
   PROP_MODELO: 'MODELO_IA',
 
   /**
    * Modelo usado para redactar el informe gerencial cuando hay API key.
    * Se puede cambiar sin tocar código con la propiedad MODELO_IA.
    */
-  MODELO_IA_POR_DEFECTO: 'claude-sonnet-5',
+  MODELO_IA_POR_DEFECTO: 'gemini-2.5-flash',
 
-  /** Endpoint de la API de mensajes. */
-  API_URL: 'https://api.anthropic.com/v1/messages',
-  API_VERSION: '2023-06-01',
+  /** Base del endpoint de la API de Gemini (Google AI). */
+  API_URL_BASE: 'https://generativelanguage.googleapis.com/v1beta/models/',
+
+  /** Presupuesto de razonamiento del modelo (0 lo desactiva; -1 lo deja dinámico). */
+  IA_PRESUPUESTO_RAZONAMIENTO: 1024,
+
+  /** Techo de tokens de salida (incluye los tokens de razonamiento). */
+  IA_MAX_TOKENS: 16384,
 
   /** Cargos que además de su formulario pueden ver/enviar el informe gerencial. */
   CARGOS_CON_INFORME: ['Directores'],

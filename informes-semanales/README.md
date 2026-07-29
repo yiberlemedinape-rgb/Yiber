@@ -29,7 +29,7 @@ gerencial los jueves a las 5:00 p. m.**
                  └───────────────┬─────────────────────────┘
                                  │ jueves 17:00 (disparador)
                  ┌───────────────▼─────────────────────────┐
-                 │ Informe.gs → Ia.gs (opcional) → Correo  │
+                 │ Informe.gs → Gemini (opcional) → Correo │
                  │  Markdown con las 5 secciones exigidas  │
                  └───────────────┬─────────────────────────┘
                                  ▼
@@ -54,7 +54,7 @@ o quitar un campo se hace en un solo lugar.**
 | `Datos.gs` | Lectura/escritura de formularios, serialización de tablas dentro de una celda, verificación de encabezados. |
 | `Kpis.gs` | Extracción automática de métricas hacia `KPI_Datos`. |
 | `Informe.gs` | Consolidación semanal y redactor determinista (las 5 secciones). |
-| `Ia.gs` | Redacción asistida por modelo de lenguaje (opcional). |
+| `Ia.gs` | Conector con la API de Gemini (`gemini-2.5-flash`) para la redacción asistida (opcional). |
 | `Correo.gs` | Markdown → HTML, envío del correo y disparador de los jueves. |
 | `Code.gs` | Menú de Sheets, `doGet()` y la API que consume la interfaz. |
 | `Index.html`, `Estilos.html`, `Js.html` | Interfaz web dinámica. |
@@ -126,8 +126,8 @@ métricas anteriores, nunca las duplica.
 | `CORREO_GERENTE` | ✅ | Destinatario del informe de los jueves. |
 | `CORREO_COPIA` | — | Copias (separadas por coma). |
 | `ADMIN_CORREOS` | — | Quién puede **enviar** el informe desde la interfaz. Si está vacía, pueden hacerlo los cargos de `CONFIG.CARGOS_CON_INFORME` (por defecto, Directores). |
-| `ANTHROPIC_API_KEY` | — | Activa la redacción asistida. Sin ella, se usa el informe automático. |
-| `MODELO_IA` | — | Modelo a usar. Por defecto `claude-sonnet-5`. |
+| `GEMINI_API_KEY` | — | Clave de la API de Gemini (se obtiene en [Google AI Studio](https://aistudio.google.com/apikey)). Activa la redacción asistida; sin ella se usa el informe automático. |
+| `MODELO_IA` | — | Modelo a usar. Por defecto `gemini-2.5-flash`. Se admite escribirlo con o sin el prefijo `models/`. |
 
 ### 4.3 Verificar la estructura
 
@@ -196,20 +196,58 @@ reportó** (calculado contra la hoja `Usuario`).
    Arma las cinco secciones desde los datos crudos: marca con 🔴 los equipos
    cuyo estado o falla contiene palabras críticas, ordena las OS por días de
    demora, resalta clientes y valores en negrita.
-2. **Asistido por IA** (`Ia.gs`) — si hay `ANTHROPIC_API_KEY`, un modelo redacta
-   el análisis siguiendo las `DIRECTRICES_INFORME` sobre el JSON consolidado.
+2. **Asistido por Gemini** (`Ia.gs`) — si hay `GEMINI_API_KEY`, el modelo
+   `gemini-2.5-flash` redacta el análisis siguiendo las `DIRECTRICES_INFORME`
+   sobre el JSON consolidado.
 
 El determinista es el **respaldo real**: si no hay clave, falla la red, la API
 responde un error o el modelo declina la solicitud, el correo del jueves sale
 igual con toda la información. Los avisos de por qué se usó el respaldo se ven
 en la vista previa de la interfaz.
 
-### 6.3 Umbrales configurables
+### 6.3 Cómo se llama a Gemini
+
+```
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+x-goog-api-key: <GEMINI_API_KEY>
+
+{
+  "systemInstruction": { "parts": [{ "text": "<DIRECTRICES_INFORME>" }] },
+  "contents": [{ "role": "user", "parts": [{ "text": "<JSON consolidado>" }] }],
+  "generationConfig": {
+    "temperature": 0.35,
+    "topP": 0.95,
+    "maxOutputTokens": 16384,
+    "thinkingConfig": { "thinkingBudget": 1024 }
+  }
+}
+```
+
+Detalles que importan en la práctica:
+
+- **La clave viaja en el encabezado `x-goog-api-key`, no en la URL.** Es
+  deliberado: la URL sí queda registrada en los logs de ejecución de Apps
+  Script, y ahí la clave sería visible para cualquiera con acceso al proyecto.
+- **En los modelos 2.5 los tokens de razonamiento consumen `maxOutputTokens`.**
+  Si el presupuesto de razonamiento se come el cupo, Gemini responde
+  `finishReason: MAX_TOKENS` **sin texto**. Por eso el presupuesto está acotado
+  a 1.024 tokens contra un techo de 16.384, y ese caso está manejado
+  explícitamente: cae al informe determinista y explica qué pasó.
+- Las partes marcadas con `thought: true` se descartan al armar el Markdown:
+  son razonamiento del modelo, no el informe.
+- Se distinguen y se traducen los motivos de bloqueo (`SAFETY`, `RECITATION`,
+  `PROHIBITED_CONTENT`, …) para que el aviso en la interfaz sea legible.
+- Una respuesta **truncada pero con texto** sí se aprovecha; se le añade una
+  nota al final indicando que viene incompleta.
+
+### 6.4 Umbrales configurables
 
 | Constante | Por defecto | Efecto |
 |---|---|---|
 | `CONFIG.UMBRAL_DIAS_DEMORA` | `5` | Días a partir de los cuales una OS aparece en las alertas críticas. |
 | `CONFIG.SEMANAS_EDITABLES` | `6` | Semanas hacia atrás que un colaborador puede corregir. |
+| `CONFIG.IA_MAX_TOKENS` | `16384` | Techo de tokens de salida de Gemini (incluye razonamiento). |
+| `CONFIG.IA_PRESUPUESTO_RAZONAMIENTO` | `1024` | Presupuesto de razonamiento. `0` lo desactiva, `-1` lo deja dinámico. |
 | `PALABRAS_CRITICAS` / `PALABRAS_PERSONAL` | — | Vocabulario que dispara el marcado de riesgo. |
 
 ---
@@ -244,7 +282,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~60 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~90 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -252,8 +290,15 @@ Cubre: semana ISO y parseo de números colombianos, creación y verificación de
 hojas, alias de cargos y control de acceso, guardado con *upsert*, ida y vuelta
 de las tablas dentro de una celda (incluidos los caracteres escapados), no
 duplicación de KPI, consolidación multi-área, las cinco secciones del informe
-con sus umbrales, la conversión Markdown → HTML (incluido el escape de HTML
-malicioso) y el respaldo cuando la IA no está disponible.
+con sus umbrales, y la conversión Markdown → HTML (incluido el escape de HTML
+malicioso).
+
+La integración con Gemini se prueba con la API simulada, así que se verifica
+sin gastar cuota ni depender de la red: forma del `systemInstruction` y del
+`contents`, que la clave viaje en el encabezado y **no** en la URL, el descarte
+de las partes `thought`, y los cinco modos de fallo que caen al informe
+determinista (HTTP 429, bloqueo de seguridad, respuesta vacía por
+`MAX_TOKENS`, respuesta truncada con texto y caída de red).
 
 Ejecútalo antes de tocar el `ESQUEMA`: si renombras una clave o una columna,
 las pruebas lo detectan de inmediato.

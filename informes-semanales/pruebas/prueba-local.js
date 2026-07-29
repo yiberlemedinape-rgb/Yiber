@@ -75,6 +75,16 @@ const LIBRO = new FakeSpreadsheet();
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const dos = n => String(n).padStart(2, '0');
 
+/* Propiedades del script y respuesta de UrlFetchApp: mutables, para poder
+   simular la API de Gemini desde las pruebas. */
+const PROPS = {};
+let FETCH = () => { throw new Error('sin red'); };
+/** Construye la respuesta que devuelve UrlFetchApp.fetch(). */
+const respuestaHttp = (codigo, cuerpo) => ({
+  getResponseCode: () => codigo,
+  getContentText: () => (typeof cuerpo === 'string' ? cuerpo : JSON.stringify(cuerpo))
+});
+
 const sandbox = {
   console,
   SpreadsheetApp: { getActiveSpreadsheet: () => LIBRO },
@@ -91,7 +101,9 @@ const sandbox = {
     }
   },
   PropertiesService: {
-    getScriptProperties: () => ({ getProperty: () => null })
+    getScriptProperties: () => ({
+      getProperty: k => (Object.prototype.hasOwnProperty.call(PROPS, k) ? PROPS[k] : null)
+    })
   },
   LockService: {
     getDocumentLock: () => ({ waitLock() {}, releaseLock() {} })
@@ -102,7 +114,7 @@ const sandbox = {
   },
   MailApp: { sendEmail: o => { sandbox.__correo = o; } },
   ScriptApp: { getProjectTriggers: () => [] },
-  UrlFetchApp: { fetch: () => { throw new Error('sin red'); } }
+  UrlFetchApp: { fetch: (url, opciones) => FETCH(url, opciones) }
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
@@ -347,9 +359,96 @@ ok(rechazoPeriodo, 'apiGuardar rechaza semanas fuera de la ventana de correcció
 
 /* ===== 10. Respaldo sin IA ===== */
 console.log('\n[10] Respaldo cuando la IA no está disponible');
+ok(S.iaDisponible() === false, 'sin clave, la IA está inactiva');
 const conRespaldo = S.construirInforme(P.anio, P.semana, true);
 ok(conRespaldo.fuente === 'datos', 'cae al informe determinista sin API key');
-ok(conRespaldo.aviso.indexOf('ANTHROPIC_API_KEY') >= 0, 'explica por qué', conRespaldo.aviso);
+ok(conRespaldo.aviso.indexOf('GEMINI_API_KEY') >= 0, 'explica por qué', conRespaldo.aviso);
+
+/* ===== 11. Integración con la API de Gemini ===== */
+console.log('\n[11] API de Gemini (gemini-2.5-flash)');
+PROPS.GEMINI_API_KEY = 'clave-de-prueba';
+ok(S.iaDisponible() === true, 'con clave, la IA se activa');
+ok(S.modeloIa_() === 'gemini-2.5-flash', 'modelo por defecto gemini-2.5-flash', S.modeloIa_());
+PROPS.MODELO_IA = 'models/gemini-2.5-flash';
+ok(S.modeloIa_() === 'gemini-2.5-flash', 'se tolera el prefijo "models/"', S.modeloIa_());
+delete PROPS.MODELO_IA;
+ok(S.urlGemini_() ===
+   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+   'URL del endpoint bien formada', S.urlGemini_());
+
+/* 11.1 Respuesta correcta */
+let peticion = null;
+FETCH = (url, opciones) => {
+  peticion = { url, opciones, cuerpo: JSON.parse(opciones.payload) };
+  return respuestaHttp(200, {
+    candidates: [{
+      content: { role: 'model', parts: [
+        { thought: true, text: 'razonamiento interno que no debe salir' },
+        { text: '## 📋 RESUMEN EJECUTIVO (Semana Actual)\n\nLa semana cerró estable.' }
+      ] },
+      finishReason: 'STOP'
+    }],
+    usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 120 }
+  });
+};
+const conIa = S.construirInforme(P.anio, P.semana, true);
+ok(conIa.fuente === 'ia', 'usa la redacción de Gemini cuando responde bien');
+ok(conIa.markdown.indexOf('La semana cerró estable.') >= 0, 'incorpora el texto del modelo');
+ok(conIa.markdown.indexOf('razonamiento interno') < 0, 'descarta las partes marcadas como thought');
+ok(conIa.markdown.indexOf('Pendientes de envío:') >= 0, 'conserva el anexo de cobertura');
+ok(peticion.opciones.headers['x-goog-api-key'] === 'clave-de-prueba',
+   'la clave viaja en el encabezado, no en la URL');
+ok(peticion.url.indexOf('clave-de-prueba') < 0, 'la URL no contiene la clave');
+ok(peticion.cuerpo.systemInstruction.parts[0].text.indexOf('ALERTAS CRÍTICAS') >= 0,
+   'las directrices van como systemInstruction');
+ok(peticion.cuerpo.contents[0].role === 'user' &&
+   peticion.cuerpo.contents[0].parts[0].text.indexOf('Cerrejón') >= 0,
+   'el JSON consolidado viaja en el contenido del usuario');
+ok(peticion.cuerpo.generationConfig.thinkingConfig.thinkingBudget === 1024,
+   'se envía el presupuesto de razonamiento');
+
+/* 11.2 Error HTTP */
+FETCH = () => respuestaHttp(429, { error: { code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED' } });
+const con429 = S.construirInforme(P.anio, P.semana, true);
+ok(con429.fuente === 'datos', 'un 429 cae al informe determinista');
+ok(con429.aviso.indexOf('Quota exceeded') >= 0, 'muestra el mensaje real de la API', con429.aviso);
+
+/* 11.3 Prompt bloqueado */
+FETCH = () => respuestaHttp(200, { promptFeedback: { blockReason: 'SAFETY' } });
+const conBloqueo = S.construirInforme(P.anio, P.semana, true);
+ok(conBloqueo.fuente === 'datos', 'un bloqueo de seguridad cae al determinista');
+ok(conBloqueo.aviso.indexOf('filtros de seguridad') >= 0, 'traduce el motivo del bloqueo', conBloqueo.aviso);
+
+/* 11.4 Sin texto por agotar tokens (caso típico de los modelos 2.5) */
+FETCH = () => respuestaHttp(200, { candidates: [{ content: { parts: [] }, finishReason: 'MAX_TOKENS' }] });
+const sinTexto = S.construirInforme(P.anio, P.semana, true);
+ok(sinTexto.fuente === 'datos', 'una respuesta vacía cae al determinista');
+ok(sinTexto.aviso.indexOf('tokens de salida') >= 0, 'explica que se agotaron los tokens', sinTexto.aviso);
+
+/* 11.5 Respuesta truncada pero con contenido */
+FETCH = () => respuestaHttp(200, {
+  candidates: [{ content: { parts: [{ text: '## 📋 RESUMEN EJECUTIVO\n\nTexto parcial' }] },
+                 finishReason: 'MAX_TOKENS' }]
+});
+const truncado = S.construirInforme(P.anio, P.semana, true);
+ok(truncado.fuente === 'ia', 'una respuesta truncada con texto sí se aprovecha');
+ok(truncado.markdown.indexOf('se truncó por límite de tokens') >= 0, 'avisa que viene truncada');
+
+/* 11.6 Caída de red */
+FETCH = () => { throw new Error('DNS timeout'); };
+const sinRed = S.construirInforme(P.anio, P.semana, true);
+ok(sinRed.fuente === 'datos', 'una caída de red cae al determinista');
+ok(sinRed.aviso.indexOf('DNS timeout') >= 0, 'reporta el error de red', sinRed.aviso);
+
+/* 11.7 El correo se arma igual con el respaldo */
+PROPS.CORREO_GERENTE = 'gerencia@kaeser.com';
+const envio = S.enviarInforme(P.anio, P.semana);
+ok(envio.ok && envio.fuente === 'datos', 'el correo sale aunque la IA esté caída');
+ok(S.__correo.to === 'gerencia@kaeser.com', 'destinatario correcto');
+ok(S.__correo.subject.indexOf('Semana 31') >= 0, 'asunto con la semana', S.__correo.subject);
+ok(S.__correo.htmlBody.indexOf('KAESER COMPRESORES') >= 0, 'cuerpo HTML con la plantilla');
+ok(S.__correo.body.indexOf('## 📋 RESUMEN EJECUTIVO') >= 0, 'cuerpo alterno en texto plano');
+delete PROPS.GEMINI_API_KEY;
 
 if (process.env.VER) { console.log('\n===== INFORME =====\n' + md); }
 console.log('\n' + (fallos ? '❌ ' + fallos + ' prueba(s) fallida(s)' : '✅ Todas las pruebas pasaron'));

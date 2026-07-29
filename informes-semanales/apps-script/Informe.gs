@@ -6,8 +6,8 @@
  * Hay dos redactores:
  *   1) `informeDeterminista_`  — siempre disponible, sin dependencias externas.
  *      Arma las cinco secciones obligatorias a partir de los datos crudos.
- *   2) `informeConIa_` (Ia.gs) — si hay ANTHROPIC_API_KEY configurada, un
- *      modelo redacta el análisis siguiendo las DIRECTRICES_INFORME.
+ *   2) `informeConIa_` (Ia.gs) — si hay GEMINI_API_KEY configurada, Gemini
+ *      redacta el análisis siguiendo las DIRECTRICES_INFORME.
  *
  * El determinista es el respaldo: si la IA falla, el jueves a las 5:00 p.m.
  * igual sale un informe con la información completa.

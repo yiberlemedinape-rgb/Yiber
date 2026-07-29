@@ -1,24 +1,29 @@
 /**
  * Ia.gs
  * ---------------------------------------------------------------------------
- * Redacción del informe gerencial con un modelo de lenguaje (opcional).
+ * Redacción del informe gerencial con la API de Gemini (Google AI).
  *
- * Se activa sólo si existe la propiedad de script ANTHROPIC_API_KEY.
- * Si no existe, falla la red o el modelo declina la solicitud, `construirInforme`
- * cae automáticamente al redactor determinista de Informe.gs: el correo del
- * jueves nunca se queda sin enviar por una dependencia externa.
+ * Modelo por defecto: gemini-2.5-flash.
+ * Endpoint: POST {API_URL_BASE}{modelo}:generateContent
+ *
+ * Se activa sólo si existe la propiedad de script GEMINI_API_KEY.
+ * Si no existe, falla la red, la API devuelve error, el prompt es bloqueado o
+ * la respuesta llega vacía, `construirInforme` cae automáticamente al redactor
+ * determinista de Informe.gs: el correo del jueves nunca se queda sin enviar
+ * por una dependencia externa.
  *
  * Configuración (Extensiones → Apps Script → Configuración del proyecto →
  * Propiedades del script):
- *   ANTHROPIC_API_KEY   Clave de la API.
- *   MODELO_IA           Opcional. Por defecto CONFIG.MODELO_IA_POR_DEFECTO.
+ *   GEMINI_API_KEY   Clave obtenida en Google AI Studio (aistudio.google.com).
+ *   MODELO_IA        Opcional. Por defecto CONFIG.MODELO_IA_POR_DEFECTO.
  * ---------------------------------------------------------------------------
  */
 
-/** Modelo configurado (o el de por defecto). */
+/** Modelo configurado (se admite escribirlo con o sin el prefijo "models/"). */
 function modeloIa_() {
-  return PropertiesService.getScriptProperties().getProperty(CONFIG.PROP_MODELO) ||
-         CONFIG.MODELO_IA_POR_DEFECTO;
+  var modelo = texto_(PropertiesService.getScriptProperties()
+    .getProperty(CONFIG.PROP_MODELO)) || CONFIG.MODELO_IA_POR_DEFECTO;
+  return modelo.replace(/^models\//, '');
 }
 
 /** Clave de API configurada (cadena vacía si no hay). */
@@ -29,6 +34,11 @@ function apiKey_() {
 /** ¿Está habilitada la redacción asistida? */
 function iaDisponible() {
   return apiKey_().length > 0;
+}
+
+/** URL completa del endpoint de generación para el modelo configurado. */
+function urlGemini_() {
+  return CONFIG.API_URL_BASE + modeloIa_() + ':generateContent';
 }
 
 /**
@@ -81,6 +91,19 @@ function datosParaIa_(consolidado) {
   return salida;
 }
 
+/** Mensaje legible para los motivos de bloqueo o corte más comunes. */
+function motivoGemini_(codigo) {
+  var motivos = {
+    SAFETY: 'el contenido fue marcado por los filtros de seguridad',
+    RECITATION: 'la respuesta fue bloqueada por recitación',
+    PROHIBITED_CONTENT: 'el contenido fue considerado prohibido',
+    BLOCKLIST: 'el contenido coincidió con la lista de bloqueo',
+    SPII: 'el contenido fue marcado por incluir datos personales sensibles',
+    OTHER: 'la API no entregó un motivo específico'
+  };
+  return motivos[codigo] || codigo;
+}
+
 /**
  * Pide al modelo el cuerpo del informe (las cinco secciones obligatorias).
  * @return {Object} { ok, markdown?, motivo? }
@@ -88,7 +111,7 @@ function datosParaIa_(consolidado) {
 function informeConIa_(consolidado) {
   var clave = apiKey_();
   if (!clave) {
-    return { ok: false, motivo: 'No hay ANTHROPIC_API_KEY configurada; se usó el informe automático.' };
+    return { ok: false, motivo: 'No hay GEMINI_API_KEY configurada; se usó el informe automático.' };
   }
 
   var datos = datosParaIa_(consolidado);
@@ -102,60 +125,87 @@ function informeConIa_(consolidado) {
     '```json\n' + JSON.stringify(datos, null, 1) + '\n```';
 
   var cuerpo = {
-    model: modeloIa_(),
-    max_tokens: 12000,
-    system: DIRECTRICES_INFORME,
-    output_config: { effort: 'medium' },
-    messages: [{ role: 'user', content: mensaje }]
+    systemInstruction: { parts: [{ text: DIRECTRICES_INFORME }] },
+    contents: [{ role: 'user', parts: [{ text: mensaje }] }],
+    generationConfig: {
+      temperature: 0.35,
+      topP: 0.95,
+      maxOutputTokens: CONFIG.IA_MAX_TOKENS,
+      // En los modelos 2.5 los tokens de razonamiento consumen maxOutputTokens.
+      // Un presupuesto acotado deja margen suficiente para el informe completo.
+      thinkingConfig: { thinkingBudget: CONFIG.IA_PRESUPUESTO_RAZONAMIENTO }
+    }
   };
 
   var respuesta;
   try {
-    respuesta = UrlFetchApp.fetch(CONFIG.API_URL, {
+    respuesta = UrlFetchApp.fetch(urlGemini_(), {
       method: 'post',
       contentType: 'application/json',
-      headers: {
-        'x-api-key': clave,
-        'anthropic-version': CONFIG.API_VERSION
-      },
+      // La clave viaja en el encabezado, no en la URL, para que no quede
+      // registrada en los logs de ejecución de Apps Script.
+      headers: { 'x-goog-api-key': clave },
       payload: JSON.stringify(cuerpo),
       muteHttpExceptions: true
     });
   } catch (e) {
-    return { ok: false, motivo: 'No fue posible contactar la API: ' + e.message };
+    return { ok: false, motivo: 'No fue posible contactar la API de Gemini: ' + e.message };
   }
 
   var codigo = respuesta.getResponseCode();
   var texto = respuesta.getContentText();
 
-  if (codigo !== 200) {
-    return { ok: false, motivo: 'La API respondió ' + codigo + ': ' + texto.slice(0, 300) };
-  }
-
   var json;
   try {
     json = JSON.parse(texto);
   } catch (e2) {
-    return { ok: false, motivo: 'Respuesta de la API ilegible.' };
+    return { ok: false, motivo: 'Respuesta de la API de Gemini ilegible (HTTP ' + codigo + ').' };
   }
 
-  // El modelo puede declinar la solicitud: se responde 200 con stop_reason "refusal".
-  if (json.stop_reason === 'refusal') {
-    return { ok: false, motivo: 'El modelo declinó redactar el informe; se usó el informe automático.' };
+  if (codigo !== 200) {
+    var detalle = (json && json.error && json.error.message)
+      ? json.error.message
+      : texto.slice(0, 300);
+    return { ok: false, motivo: 'La API de Gemini respondió ' + codigo + ': ' + detalle };
   }
 
-  var partes = [];
-  var bloques = json.content || [];
-  for (var i = 0; i < bloques.length; i++) {
-    if (bloques[i].type === 'text' && bloques[i].text) partes.push(bloques[i].text);
+  // El prompt completo puede ser bloqueado antes de generar nada.
+  if (json.promptFeedback && json.promptFeedback.blockReason) {
+    return {
+      ok: false,
+      motivo: 'Gemini bloqueó la solicitud (' +
+              motivoGemini_(json.promptFeedback.blockReason) + '); se usó el informe automático.'
+    };
   }
-  var markdown = partes.join('\n').trim();
+
+  var candidatos = json.candidates || [];
+  if (!candidatos.length) {
+    return { ok: false, motivo: 'Gemini no devolvió candidatos; se usó el informe automático.' };
+  }
+
+  var candidato = candidatos[0];
+  var partes = (candidato.content && candidato.content.parts) ? candidato.content.parts : [];
+  var trozos = [];
+  for (var i = 0; i < partes.length; i++) {
+    // `thought: true` marca resúmenes de razonamiento: no son parte del informe.
+    if (partes[i].thought) continue;
+    if (partes[i].text) trozos.push(partes[i].text);
+  }
+  var markdown = trozos.join('\n').trim();
 
   if (!markdown) {
-    return { ok: false, motivo: 'La API no devolvió texto; se usó el informe automático.' };
+    var razon = candidato.finishReason || 'sin texto';
+    if (razon === 'MAX_TOKENS') {
+      razon = 'se agotaron los tokens de salida antes de escribir el informe ' +
+              '(revisa CONFIG.IA_MAX_TOKENS o baja el presupuesto de razonamiento)';
+    } else {
+      razon = motivoGemini_(razon);
+    }
+    return { ok: false, motivo: 'Gemini no entregó texto: ' + razon + '; se usó el informe automático.' };
   }
-  if (json.stop_reason === 'max_tokens') {
-    markdown += '\n\n_(El análisis se truncó por límite de tokens.)_';
+
+  if (candidato.finishReason === 'MAX_TOKENS') {
+    markdown += '\n\n_(El análisis se truncó por límite de tokens de salida.)_';
   }
 
   return { ok: true, markdown: markdown };
