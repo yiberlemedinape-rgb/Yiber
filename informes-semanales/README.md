@@ -52,6 +52,7 @@ o quitar un campo se hace en un solo lugar.**
 | `Semana.gs` | Semana ISO 8601, rangos de fechas, normalización de texto y parseo de números escritos por humanos. |
 | `Usuarios.gs` | Control de acceso contra la hoja `Usuario`; roles de administrador. |
 | `Datos.gs` | Lectura/escritura de formularios, serialización de tablas dentro de una celda, verificación de encabezados. |
+| `Adjuntos.gs` | Guarda imágenes y tablas en Google Drive, con una carpeta por semana. |
 | `Kpis.gs` | Extracción automática de métricas hacia `KPI_Datos`. |
 | `Informe.gs` | Consolidación semanal y redactor determinista (las 5 secciones). |
 | `Ia.gs` | Conector con la API de Gemini (`gemini-2.5-flash`) para la redacción asistida (opcional). |
@@ -117,7 +118,59 @@ Convenios | 40 | 1 | 97,5
 - Al leer, la primera línea se descarta si coincide con el encabezado esperado,
   de modo que también funciona si alguien pega las filas sin encabezado.
 
-### 3.3 `KPI_Datos`
+### 3.3 Tipos de campo disponibles
+
+| `tipo` | Control en la interfaz | Cómo se guarda |
+|---|---|---|
+| `texto` | Área de texto o campo de una línea | Texto plano en la celda |
+| `tabla` | Filas dinámicas con columnas fijas | Bloque `col \| col \| …` con encabezado |
+| `tablaLibre` | Recuadro que recibe un rango **pegado desde Excel** | Igual, pero los encabezados son los de la hoja de origen |
+| `imagen` | Zona para **pegar (Ctrl+V)**, arrastrar o elegir archivo | `Archivo \| Enlace` a Drive, opcionalmente `\| Comentario` |
+
+Las columnas de una `tabla` admiten además `opciones`:
+
+```js
+{ clave: 'sucursal', titulo: 'Sucursal', opciones: SUCURSALES }               // lista cerrada → <select>
+{ clave: 'distribuidor', titulo: 'Distribuidor',
+  opciones: DISTRIBUIDORES, abierta: true }                                   // lista abierta → sugerencias
+```
+
+La diferencia no es cosmética. Una **lista cerrada** obliga a que "Antioquia"
+se escriba siempre igual, y eso es lo que permite que la serie de KPI de esa
+sucursal no se parta en tres. Una **lista abierta** sugiere los distribuidores
+conocidos pero deja registrar uno nuevo sin esperar a que alguien lo agregue al
+código.
+
+### 3.4 Adjuntos: imágenes y tablas de Excel
+
+Los campos `imagen` no guardan bytes en la hoja: suben el archivo a Drive y
+dejan en la celda el nombre y el enlace, de modo que la hoja sigue siendo
+legible y auditable. La carpeta se crea sola:
+
+```
+<carpeta raíz configurada>/
+  2026/
+    Semana 31 (27 jul – 02 ago)/
+      Gestión Comercial/
+        S31 - Órdenes Relevantes - Carlos Arbeláez.png
+      Soporte Técnico/
+        S31 - First Time Fix Rate (FTF) - Edilfonso Vaca.png
+```
+
+- **Pegar con Ctrl+V, arrastrar o elegir archivo**: las tres vías funcionan.
+- Volver a enviar el reporte **reemplaza** la imagen (mismo nombre) en vez de
+  acumular duplicados; la anterior queda en la papelera de Drive.
+- Un adjunto ya guardado **no se vuelve a subir**: el formulario devuelve sólo
+  su enlace.
+- Tope de 8 MB por archivo (`CONFIG.ADJUNTO_MAX_MB`).
+
+Para las **tablas de Excel** (`tablaLibre`) no se sube archivo: se copia el
+rango en Excel y se pega en el recuadro. El portapapeles entrega el rango
+separado por tabuladores, así que se conserva la estructura original —
+encabezados y columnas— y, a diferencia de una captura, **las cifras siguen
+siendo datos**: se pueden leer, sumar y reproducir como tabla en el informe.
+
+### 3.5 `KPI_Datos`
 
 `Año | N° de Semana | Área | Nombre | Métrica | Valor`
 
@@ -149,11 +202,11 @@ clasp push
 ```
 
 **Opción manual** — Abre el libro `Informes_Semanales` → **Extensiones → Apps
-Script** y crea los 13 archivos. Deben quedar exactamente así:
+Script** y crea los 14 archivos. Deben quedar exactamente así:
 
 | Tipo | Archivos |
 |---|---|
-| **Script** (9) | `Code.gs` · `Config.gs` · `Correo.gs` · `Datos.gs` · `Ia.gs` · `Informe.gs` · `Kpis.gs` · `Semana.gs` · `Usuarios.gs` |
+| **Script** (10) | `Adjuntos.gs` · `Code.gs` · `Config.gs` · `Correo.gs` · `Datos.gs` · `Ia.gs` · `Informe.gs` · `Kpis.gs` · `Semana.gs` · `Usuarios.gs` |
 | **HTML** (3) | `Estilos.html` · `Index.html` · `Js.html` |
 | Manifiesto | `appsscript.json` (se muestra activando *Mostrar el archivo de manifiesto* en Configuración) |
 
@@ -180,6 +233,7 @@ pegado dentro de un `.gs`.
 | `CORREO_COPIA` | — | Copias del informe (separadas por coma). |
 | `GEMINI_API_KEY` | — | Clave de la API de Gemini (se obtiene en [Google AI Studio](https://aistudio.google.com/apikey)). Activa la redacción asistida; sin ella se usa el informe automático. |
 | `MODELO_IA` | — | Modelo a usar. Por defecto `gemini-2.5-flash`. Se admite escribirlo con o sin el prefijo `models/`. |
+| `CARPETA_DRIVE` | — | ID de la carpeta de Drive para los adjuntos. Por defecto, la de `CONFIG.DRIVE_CARPETA_RAIZ`. |
 
 > 🔑 **La clave de Gemini no va en el código.** Va aquí, en las propiedades del
 > script, y `Ia.gs` la lee con `PropertiesService`. Escrita dentro de un `.gs`
@@ -339,7 +393,28 @@ responde un error o el modelo declina la solicitud, el correo del jueves sale
 igual con toda la información. Los avisos de por qué se usó el respaldo se ven
 en la vista previa de la interfaz.
 
-### 6.3 Cómo se llama a Gemini
+### 6.3 Cómo lee Gemini las imágenes
+
+> ⚠️ **Gemini no puede leer una carpeta de Drive.** `generateContent` no tiene
+> conector a Drive: sólo acepta bytes dentro de la petición (`inline_data`) o
+> URIs de su propia Files API.
+
+Lo que hace el sistema consigue el mismo objetivo por otra vía: al redactar el
+informe, **Apps Script lee los archivos desde Drive con `DriveApp` y los adjunta
+a la petición**. Cada imagen va precedida de una parte de texto que dice de qué
+área y de qué indicador es —sin ese rótulo el modelo recibe capturas sin
+contexto— y, si el campo tiene comentario, también lo incluye.
+
+| Tope | Valor | Por qué |
+|---|---|---|
+| `CONFIG.IA_MAX_IMAGENES` | 12 | Evita peticiones desproporcionadas |
+| `CONFIG.IA_MAX_MB_IMAGENES` | 14 MB | Una petición con datos en línea no debe pasar de ~20 MB |
+
+Si una imagen se omite —porque se borró de Drive, porque se superó un tope o
+porque su tipo no es interpretable— **el informe se envía igual** y el aviso
+dice cuál faltó. Nunca se calla.
+
+### 6.4 Cómo se llama a Gemini
 
 ```
 POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
@@ -374,7 +449,7 @@ Detalles que importan en la práctica:
 - Una respuesta **truncada pero con texto** sí se aprovecha; se le añade una
   nota al final indicando que viene incompleta.
 
-### 6.4 Umbrales configurables
+### 6.5 Umbrales configurables
 
 | Constante | Por defecto | Efecto |
 |---|---|---|
@@ -382,12 +457,43 @@ Detalles que importan en la práctica:
 | `CONFIG.SEMANAS_EDITABLES` | `6` | Semanas hacia atrás que un colaborador puede corregir. |
 | `CONFIG.IA_MAX_TOKENS` | `16384` | Techo de tokens de salida de Gemini (incluye razonamiento). |
 | `CONFIG.IA_PRESUPUESTO_RAZONAMIENTO` | `1024` | Presupuesto de razonamiento. `0` lo desactiva, `-1` lo deja dinámico. |
+| `CONFIG.ADJUNTO_MAX_MB` | `8` | Peso máximo por archivo adjunto. |
+| `CONFIG.IA_MAX_IMAGENES` / `IA_MAX_MB_IMAGENES` | `12` / `14` | Cuántas imágenes viajan a Gemini y cuánto pesan. |
 | `CONFIG.ADMIN_TAMBIEN_REPORTA` | `false` | Si es `true`, al administrador se le muestra además el formulario de su área. |
 | `PALABRAS_CRITICAS` / `PALABRAS_PERSONAL` | — | Vocabulario que dispara el marcado de riesgo. |
 
 ---
 
-## 7. Métricas Clave de Directores
+## 7. Consecuencia de convertir indicadores en imágenes
+
+Cuatro ítems pasaron de tabla a imagen adjunta: **Órdenes Relevantes**,
+**KPIs de Convenios**, **Métricas Línea de Emergencia** y **First Time Fix
+Rate**. Es lo que se pidió y ya está implementado, pero tiene un efecto que
+conviene tener presente:
+
+**esas cifras dejan de alimentar `KPI_Datos`.** Antes, el `% FTF` o el número de
+convenios activos se guardaban como números y podían graficarse semana a semana.
+Ahora viven dentro de una imagen: Gemini las lee para redactar el informe, pero
+**no quedan como serie histórica** ni se pueden comparar entre semanas.
+
+Qué se conserva y qué no:
+
+| Ítem | Antes | Ahora |
+|---|---|---|
+| Órdenes Relevantes | Tabla (sin KPI) | Imagen — sin pérdida de KPI |
+| KPIs de Convenios | Activos / nuevos / cancelados en `KPI_Datos` | Imagen — **se pierde la serie** |
+| Métricas Línea de Emergencia | KPI por indicador | Imagen — **se pierde la serie** |
+| First Time Fix Rate | `% FTF` y visitas adicionales | Imagen + comentario — **se pierde la serie** |
+| Estado de Contratos (Directores) | Estado / cantidad | **Gana** KPI por asesor: vigentes, vencidos y % cumplimiento |
+
+Si en algún momento quieren recuperar la tendencia de FTF o de convenios sin
+renunciar a la imagen, la vía más simple es agregar al ESQUEMA un campo numérico
+corto junto al adjunto (`tipo: 'texto'`, `lineas: 1`, con su `kpis`). Son tres
+líneas en `Config.gs`; el resto del sistema se adapta solo.
+
+---
+
+## 8. Métricas Clave de Directores
 
 La columna **G de `Directores` — "Métricas Clave (Facturación, Forecast)"** es
 una tabla de tres columnas:
@@ -408,14 +514,14 @@ En el informe gerencial se leen como `Facturación acumulada: **3.900.000.000**
 
 ---
 
-## 8. Pruebas
+## 9. Pruebas
 
 El proyecto trae un banco de pruebas que corre la lógica completa **fuera de
 Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~150 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~185 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -450,7 +556,7 @@ las pruebas lo detectan de inmediato.
 
 ---
 
-## 9. Operación diaria
+## 10. Operación diaria
 
 **Colaborador** — sólo necesita la URL de la aplicación web:
 
@@ -481,7 +587,7 @@ Y desde el menú de Google Sheets, para la configuración
 
 ---
 
-## 10. Solución de problemas
+## 11. Solución de problemas
 
 ### `SyntaxError: Unexpected token '<', línea 1`
 

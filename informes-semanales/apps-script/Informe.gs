@@ -72,6 +72,60 @@ function textoDe_(registro, clave) {
   return (c && c.tipo === 'texto') ? texto_(c.valor) : '';
 }
 
+/** Adjuntos de un campo tipo imagen. */
+function adjuntosDe_(registro, clave) {
+  var c = registro.campos[clave];
+  return (c && c.tipo === 'imagen' && c.filas) ? c.filas : [];
+}
+
+/** Tabla de estructura libre (la pegada desde Excel). */
+function tablaLibreDe_(registro, clave) {
+  var c = registro.campos[clave];
+  return (c && c.tipo === 'tablaLibre' && c.tabla) ? c.tabla : { encabezados: [], filas: [] };
+}
+
+/**
+ * Viñetas para los adjuntos de un campo, con enlace a Drive y el comentario del
+ * área si lo tiene. El informe no incrusta la imagen: enlaza al archivo, que es
+ * lo que sobrevive dentro de un correo.
+ */
+function vinetasAdjuntos_(consolidado, area, clave, etiqueta) {
+  var L = [];
+  porArea_(consolidado, area, function (reg) {
+    var adjuntos = adjuntosDe_(reg, clave);
+    for (var i = 0; i < adjuntos.length; i++) {
+      var a = adjuntos[i];
+      L.push('- ' + etiqueta + ': [' + (a.nombre || 'ver adjunto') + '](' +
+             (a.enlace || '') + ')' +
+             (a.comentario ? ' — ' + a.comentario : '') +
+             ' _(' + reg.nombre + ')_');
+    }
+  });
+  return L;
+}
+
+/** Renderiza una tabla de estructura libre como tabla Markdown. */
+function tablaLibreAMarkdown_(tabla) {
+  if (!tabla || !tabla.filas.length) return [];
+  var L = [];
+  var cols = tabla.encabezados.length ||
+             (tabla.filas[0] ? tabla.filas[0].length : 0);
+  if (!cols) return [];
+
+  var encabezados = tabla.encabezados.length
+    ? tabla.encabezados
+    : tabla.filas[0].map(function (_, i) { return 'Columna ' + (i + 1); });
+
+  L.push('| ' + encabezados.join(' | ') + ' |');
+  L.push('|' + encabezados.map(function () { return '---'; }).join('|') + '|');
+  for (var i = 0; i < tabla.filas.length; i++) {
+    var fila = tabla.filas[i].slice(0, encabezados.length);
+    while (fila.length < encabezados.length) fila.push('');
+    L.push('| ' + fila.join(' | ') + ' |');
+  }
+  return L;
+}
+
 /** Recorre todos los registros de un área aplicando `fn(registro)`. */
 function porArea_(consolidado, area, fn) {
   var lista = consolidado.areas[area] || [];
@@ -364,18 +418,14 @@ function seccionComercial_(consolidado, kpis) {
     L.push('');
   }
 
-  // Órdenes relevantes e importantes.
-  var relevantes = recolectar_(consolidado, ['Gestión Comercial'], 'ordenesRelevantes');
+  // Órdenes relevantes (imagen adjunta) e importantes (tabla de dirección).
+  var relevantes = vinetasAdjuntos_(consolidado, 'Gestión Comercial',
+                                    'ordenesRelevantes', 'Órdenes relevantes');
   var importantes = recolectar_(consolidado, ['Directores'], 'ordenesImportantes');
   if (relevantes.length || importantes.length) {
     hubo = true;
     L.push('**Órdenes importantes cerradas**');
-    for (var r = 0; r < relevantes.length; r++) {
-      var fr = relevantes[r].fila;
-      L.push('- **' + (fr.cliente || 'N/D') + '** — ' + (fr.tipoVenta || 'venta') +
-             ' por **$' + formatearNumero_(aNumero_(fr.valor)) + '** (asesor ' +
-             (fr.asesor || 'N/D') + ')');
-    }
+    L = L.concat(relevantes);
     for (var q = 0; q < importantes.length; q++) {
       var fq = importantes[q].fila;
       L.push('- **' + (fq.cliente || 'N/D') + '** — **$' +
@@ -384,21 +434,20 @@ function seccionComercial_(consolidado, kpis) {
     L.push('');
   }
 
-  // Convenios.
-  var convenios = recolectar_(consolidado, ['Gestión Comercial'], 'kpisConvenios');
+  // Convenios: KPI como imagen adjunta, contratos por asesor como tabla.
+  var convenios = vinetasAdjuntos_(consolidado, 'Gestión Comercial',
+                                   'kpisConvenios', 'KPIs de convenios');
   var contratos = recolectar_(consolidado, ['Directores'], 'estadoContratos');
   if (convenios.length || contratos.length) {
     hubo = true;
     L.push('**Convenios y contratos**');
-    for (var v = 0; v < convenios.length; v++) {
-      var fc = convenios[v].fila;
-      L.push('- Meta anual **' + (fc.metaAnual || 'N/D') + '** · activos **' +
-             (fc.activos || '0') + '** · nuevos **' + (fc.nuevos || '0') +
-             '** · cancelados **' + (fc.cancelados || '0') + '**');
-    }
+    L = L.concat(convenios);
     for (var x = 0; x < contratos.length; x++) {
-      L.push('- ' + (contratos[x].fila.estado || 'N/D') + ': **' +
-             (contratos[x].fila.cantidad || '0') + '** _(' + contratos[x].autor + ')_');
+      var fx = contratos[x].fila;
+      L.push('- **' + (fx.asesor || 'N/D') + '** — meta **' + (fx.meta || 'N/D') +
+             '**, vigentes **' + (fx.vigentes || '0') + '**, cumplimiento **' +
+             (fx.cumplimiento || 'N/D') + '%**, vencidos **' + (fx.vencidos || '0') +
+             '** _(' + contratos[x].autor + ')_');
     }
     L.push('');
   }
@@ -440,17 +489,22 @@ function seccionComercial_(consolidado, kpis) {
     L.push('');
   }
 
-  // Negociaciones de alto impacto (texto libre).
-  var textos = [];
+  // Negociaciones de alto impacto: tabla pegada desde Excel, con su estructura.
+  var negociaciones = [];
   porArea_(consolidado, 'Gestión Comercial', function (reg) {
-    var t = textoDe_(reg, 'negociacionesAltoImpacto');
-    if (t) textos.push('- ' + t + ' _(' + reg.nombre + ')_');
+    var tabla = tablaLibreDe_(reg, 'negociacionesAltoImpacto');
+    var filas = tablaLibreAMarkdown_(tabla);
+    if (filas.length) {
+      negociaciones.push('_Reportado por ' + reg.nombre + ':_');
+      negociaciones = negociaciones.concat(filas);
+      negociaciones.push('');
+    }
   });
-  if (textos.length) {
+  if (negociaciones.length) {
     hubo = true;
     L.push('**Negociaciones de alto impacto y precios**');
-    L = L.concat(textos);
     L.push('');
+    L = L.concat(negociaciones);
   }
 
   if (!hubo) L.push('_Sin información comercial reportada esta semana._\n');
@@ -462,28 +516,22 @@ function seccionOperaciones_(consolidado, kpis) {
   var L = ['## ⚙️ OPERACIONES, SAU Y SOPORTE TÉCNICO', ''];
   var hubo = false;
 
-  // First Time Fix Rate.
-  var ftf = recolectar_(consolidado, ['Soporte Técnico'], 'firstTimeFix');
+  // First Time Fix Rate: indicador adjunto + comentario del área de soporte.
+  var ftf = vinetasAdjuntos_(consolidado, 'Soporte Técnico', 'firstTimeFix', 'Indicador FTF');
   if (ftf.length) {
     hubo = true;
     L.push('**First Time Fix Rate (FTF)**');
-    for (var i = 0; i < ftf.length; i++) {
-      var f = ftf[i].fila;
-      L.push('- **' + (f.ftf || 'N/D') + '% FTF** sobre ' + (f.totalNotificaciones || 'N/D') +
-             ' notificaciones · ' + (f.visitasAdicionales || '0') + ' visitas adicionales');
-    }
+    L = L.concat(ftf);
     L.push('');
   }
 
-  // Línea de emergencia.
-  var emergencia = recolectar_(consolidado, ['Soporte Técnico'], 'metricasEmergencia');
+  // Línea de emergencia: tablero adjunto.
+  var emergencia = vinetasAdjuntos_(consolidado, 'Soporte Técnico',
+                                    'metricasEmergencia', 'Tablero de la línea');
   if (emergencia.length) {
     hubo = true;
     L.push('**Línea de emergencia**');
-    for (var e = 0; e < emergencia.length; e++) {
-      L.push('- ' + (emergencia[e].fila.kpi || 'KPI') + ': **' +
-             (emergencia[e].fila.valor || 'N/D') + '**');
-    }
+    L = L.concat(emergencia);
     L.push('');
   }
 
@@ -621,6 +669,11 @@ function seccionPersonal_(consolidado) {
 function bloqueCobertura_(consolidado) {
   var L = ['---', '', '**Cobertura del reporte:** ' + consolidado.totalReportes +
            ' reporte(s) recibido(s).'];
+
+  var carpeta = urlCarpetaSemana_(consolidado.anio, consolidado.semana);
+  if (carpeta) {
+    L.push('**Adjuntos de la semana:** [carpeta en Drive](' + carpeta + ').');
+  }
   if (consolidado.faltantes.length) {
     var nombres = consolidado.faltantes.map(function (f) {
       return f.nombre + ' (' + f.area + ')';
@@ -654,11 +707,21 @@ function construirInforme_(anio, semana, usarIa) {
     var encabezado = '# Informe Gerencial Semanal — Kaeser Compresores\n' +
                      '**' + consolidado.etiqueta + '** · generado el ' +
                      consolidado.generado + '\n\n';
+
+    // Si alguna imagen no se pudo enviar, la gerencia debe saberlo: el informe
+    // se redactó sin ella.
+    var aviso = '';
+    if (ia.imagenesOmitidas && ia.imagenesOmitidas.length) {
+      aviso = 'Gemini leyó ' + ia.imagenesLeidas + ' imagen(es). No se pudieron ' +
+              'incluir: ' + ia.imagenesOmitidas.join('; ') + '.';
+    }
+
     return {
       markdown: encabezado + ia.markdown + '\n\n' + bloqueCobertura_(consolidado),
       fuente: 'ia',
       consolidado: consolidado,
-      aviso: ''
+      imagenesLeidas: ia.imagenesLeidas || 0,
+      aviso: aviso
     };
   }
 

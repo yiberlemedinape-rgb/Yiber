@@ -77,9 +77,26 @@ function escaparCelda_(valor) {
     .trim();
 }
 
+/**
+ * Columnas efectivas de un campo tabular.
+ *
+ * Los campos `imagen` se guardan con la misma maquinaria que las tablas, sólo
+ * que con columnas fijas. Así el adjunto queda legible en la hoja (nombre y
+ * enlace en texto plano) y no hace falta un segundo formato de serialización.
+ */
+function columnasDe_(campo) {
+  if (campo.tipo !== 'imagen') return campo.columnas;
+  var cols = [
+    { clave: 'nombre', titulo: 'Archivo' },
+    { clave: 'enlace', titulo: 'Enlace' }
+  ];
+  if (campo.comentario) cols.push({ clave: 'comentario', titulo: 'Comentario' });
+  return cols;
+}
+
 /** Encabezado del bloque: "Proceso | Solicitudes | ...". */
 function encabezadoTabla_(campo) {
-  return campo.columnas.map(function (c) { return c.titulo; }).join(CONFIG.SEP_COL);
+  return columnasDe_(campo).map(function (c) { return c.titulo; }).join(CONFIG.SEP_COL);
 }
 
 /** Convierte [{clave: valor}] en el bloque de texto que se guarda en la celda. */
@@ -89,7 +106,7 @@ function serializarTabla_(campo, filas) {
   var lineas = [];
   for (var i = 0; i < filas.length; i++) {
     var fila = filas[i] || {};
-    var celdas = campo.columnas.map(function (c) { return escaparCelda_(fila[c.clave]); });
+    var celdas = columnasDe_(campo).map(function (c) { return escaparCelda_(fila[c.clave]); });
     // Se descartan las filas totalmente vacías que deja la interfaz.
     if (celdas.join('').length === 0) continue;
     lineas.push(celdas.join(CONFIG.SEP_COL));
@@ -113,19 +130,61 @@ function parseTabla_(campo, valor) {
   var encabezado = normalizar_(encabezadoTabla_(campo));
   if (normalizar_(lineas[0]) === encabezado) lineas.shift();
 
+  var columnas = columnasDe_(campo);
   var filas = [];
   for (var i = 0; i < lineas.length; i++) {
     var celdas = lineas[i].split('|').map(function (c) { return c.trim(); });
     var fila = {};
     var vacia = true;
-    for (var j = 0; j < campo.columnas.length; j++) {
+    for (var j = 0; j < columnas.length; j++) {
       var v = celdas[j] === undefined ? '' : celdas[j];
-      fila[campo.columnas[j].clave] = v;
+      fila[columnas[j].clave] = v;
       if (v) vacia = false;
     }
     if (!vacia) filas.push(fila);
   }
   return filas;
+}
+
+/* ---------- Tablas de estructura libre (pegadas desde Excel) ---------- */
+
+/**
+ * Serializa una tabla cuyas columnas las define el usuario al pegar desde
+ * Excel. A diferencia de `tabla`, aquí los encabezados son datos: se guardan
+ * como primera línea del bloque, tal como venían en la hoja de cálculo origen.
+ *
+ * @param {Object} datos { encabezados: [...], filas: [[...], ...] }
+ */
+function serializarTablaLibre_(datos) {
+  if (!datos) return '';
+  var encabezados = (datos.encabezados || []).map(escaparCelda_);
+  var filas = datos.filas || [];
+
+  var lineas = [];
+  if (encabezados.join('').length) lineas.push(encabezados.join(CONFIG.SEP_COL));
+  for (var i = 0; i < filas.length; i++) {
+    var celdas = (filas[i] || []).map(escaparCelda_);
+    if (celdas.join('').length === 0) continue;
+    lineas.push(celdas.join(CONFIG.SEP_COL));
+  }
+  return lineas.length > (encabezados.join('').length ? 1 : 0) ? lineas.join(CONFIG.SEP_FILA) : '';
+}
+
+/** Reconstruye { encabezados, filas } desde el bloque guardado. */
+function parseTablaLibre_(valor) {
+  var crudo = texto_(valor);
+  if (!crudo) return { encabezados: [], filas: [] };
+
+  var lineas = crudo.split(/\r?\n/)
+    .map(function (l) { return l.trim(); })
+    .filter(function (l) { return l.length > 0; });
+  if (!lineas.length) return { encabezados: [], filas: [] };
+
+  var corta = function (l) { return l.split('|').map(function (c) { return c.trim(); }); };
+  return {
+    encabezados: corta(lineas[0]),
+    filas: lineas.slice(1).map(corta)
+  };
 }
 
 /* ===================== Lectura ===================== */
@@ -147,8 +206,10 @@ function filaARegistro_(area, fila) {
   for (var i = 0; i < def.campos.length; i++) {
     var campo = def.campos[i];
     var valor = fila[indiceColumna_(campo.col) - 1];
-    if (campo.tipo === 'tabla') {
-      registro.campos[campo.clave] = { tipo: 'tabla', filas: parseTabla_(campo, valor) };
+    if (campo.tipo === 'tabla' || campo.tipo === 'imagen') {
+      registro.campos[campo.clave] = { tipo: campo.tipo, filas: parseTabla_(campo, valor) };
+    } else if (campo.tipo === 'tablaLibre') {
+      registro.campos[campo.clave] = { tipo: 'tablaLibre', tabla: parseTablaLibre_(valor) };
     } else {
       registro.campos[campo.clave] = { tipo: 'texto', valor: texto_(valor) };
     }
@@ -243,13 +304,20 @@ function guardarRegistro_(area, datos) {
   fila[1] = semana;
   fila[2] = nombre;
 
+  var contexto = { anio: anio, semana: semana, area: area, colaborador: nombre };
+
   for (var i = 0; i < def.campos.length; i++) {
     var campo = def.campos[i];
     var entrada = datos.campos ? datos.campos[campo.clave] : null;
     var idx = indiceColumna_(campo.col) - 1;
 
-    if (campo.tipo === 'tabla') {
+    if (campo.tipo === 'imagen') {
+      // Sube a Drive lo que sea nuevo y deja en la celda nombre + enlace.
+      fila[idx] = serializarTabla_(campo, procesarAdjuntos_(contexto, campo, entrada || []));
+    } else if (campo.tipo === 'tabla') {
       fila[idx] = serializarTabla_(campo, entrada || []);
+    } else if (campo.tipo === 'tablaLibre') {
+      fila[idx] = serializarTablaLibre_(entrada);
     } else {
       fila[idx] = texto_(entrada);
     }

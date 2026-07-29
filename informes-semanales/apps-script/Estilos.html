@@ -142,6 +142,53 @@
 
   .cargando { color: var(--tenue); font-size: 13.5px; }
 
+  /* ---------- Adjuntos y tablas pegadas ---------- */
+  .zona-adjunto {
+    border: 2px dashed #c3cee2; border-radius: 10px; background: #fbfcfe;
+    padding: 18px 16px; text-align: center; cursor: pointer; color: var(--tenue);
+    font-size: 13.5px; transition: background .15s, border-color .15s;
+  }
+  .zona-adjunto:hover, .zona-adjunto:focus, .zona-adjunto.sobre {
+    background: var(--azul-suave); border-color: var(--azul-alto); outline: none;
+  }
+  .zona-adjunto b { color: var(--azul); }
+  .enlace-falso { color: var(--azul-alto); text-decoration: underline; }
+  .pista { font-size: 12px; color: var(--tenue); margin-top: 4px; }
+
+  .lista-adjuntos { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .adjunto {
+    display: flex; align-items: center; gap: 12px;
+    border: 1px solid var(--borde); border-radius: 8px; padding: 8px 10px; background: #fff;
+  }
+  .adjunto img {
+    width: 84px; height: 60px; object-fit: cover;
+    border-radius: 6px; border: 1px solid var(--borde); background: #f7f9fc;
+  }
+  .adjunto .sin-vista {
+    width: 84px; height: 60px; display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; border: 1px solid var(--borde); background: #f7f9fc; font-size: 24px;
+  }
+  .adjunto .info { flex: 1; min-width: 0; }
+  .adjunto .nombre {
+    font-weight: 600; font-size: 13px; color: var(--texto);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .adjunto a { font-size: 12px; color: var(--azul-alto); }
+
+  .etiqueta-comentario {
+    display: block; margin: 12px 0 4px; font-size: 12.5px;
+    font-weight: 600; color: var(--azul);
+  }
+
+  table.dinamica td.solo-lectura {
+    padding: 7px 9px; font-size: 13px; color: var(--texto); white-space: nowrap;
+  }
+  table.dinamica select {
+    width: 100%; font: inherit; border: 1px solid transparent;
+    background: transparent; padding: 6px 6px; border-radius: 6px; color: var(--texto);
+  }
+  table.dinamica select:focus { background: #fff; border-color: var(--azul-alto); outline: none; }
+
   /* ---------- Panel del administrador: vista previa del correo ---------- */
   .destinatario {
     margin-top: 14px; font-size: 13px; color: var(--tenue);

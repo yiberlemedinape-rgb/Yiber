@@ -268,11 +268,17 @@ function apiCargarRegistro(anio, semana) {
   var registro = leerRegistro_(usuario.area, Number(anio), Number(semana), usuario.nombre);
   if (!registro) return null;
 
-  // Se aplana a { clave: valor | filas } para que el formulario lo consuma directo.
+  // Se aplana para que el formulario lo consuma directo:
+  //   texto       → string
+  //   tabla       → [{col: valor}]
+  //   imagen      → [{nombre, enlace, comentario?}]  (sin bytes: ya están en Drive)
+  //   tablaLibre  → {encabezados, filas}
   var campos = {};
   for (var clave in registro.campos) {
     var c = registro.campos[clave];
-    campos[clave] = (c.tipo === 'tabla') ? c.filas : c.valor;
+    if (c.tipo === 'tabla' || c.tipo === 'imagen') campos[clave] = c.filas;
+    else if (c.tipo === 'tablaLibre') campos[clave] = c.tabla;
+    else campos[clave] = c.valor;
   }
   return { anio: registro.anio, semana: registro.semana, nombre: registro.nombre, campos: campos };
 }

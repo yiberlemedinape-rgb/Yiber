@@ -75,6 +75,55 @@ class FakeSpreadsheet {
 }
 const LIBRO = new FakeSpreadsheet();
 
+/* ---------- Fake Drive ----------
+   Reproduce lo justo de DriveApp para verificar el árbol de carpetas por
+   semana, el reemplazo de archivos y la lectura de los bytes. */
+class FakeBlob {
+  constructor(bytes, mime, nombre) {
+    Object.assign(this, { bytes, mime, nombre });
+  }
+  getBytes() { return this.bytes; }
+  getContentType() { return this.mime; }
+  getName() { return this.nombre; }
+}
+class FakeFile {
+  constructor(blob, carpeta) {
+    this.blob = blob; this.carpeta = carpeta;
+    // Los IDs reales de Drive tienen 25+ caracteres; el extractor los busca
+    // con esa forma, así que el doble debe imitarla.
+    this.id = '1FiLe' + String(++DRIVE.contador).padStart(28, 'x');
+    this.papelera = false;
+    DRIVE.archivos[this.id] = this;
+  }
+  getName() { return this.blob.getName(); }
+  getId() { return this.id; }
+  getBlob() { return this.blob; }
+  setTrashed(v) { this.papelera = v; return this; }
+}
+class FakeFolder {
+  constructor(nombre, padre) {
+    this.nombre = nombre; this.padre = padre;
+    this.id = '1FoLd' + String(++DRIVE.contador).padStart(28, 'x');
+    this.hijas = []; this.archivos = [];
+    DRIVE.carpetas[this.id] = this;
+  }
+  getName() { return this.nombre; }
+  getId() { return this.id; }
+  getUrl() { return 'https://drive.google.com/drive/folders/' + this.id; }
+  createFolder(nombre) { const f = new FakeFolder(nombre, this); this.hijas.push(f); return f; }
+  getFoldersByName(nombre) { return iterador(this.hijas.filter(f => f.nombre === nombre)); }
+  createFile(blob) { const f = new FakeFile(blob, this); this.archivos.push(f); return f; }
+  getFilesByName(nombre) {
+    return iterador(this.archivos.filter(a => !a.papelera && a.getName() === nombre));
+  }
+  /** Ruta legible desde la raíz, para las aserciones. */
+  ruta() { return (this.padre ? this.padre.ruta() + '/' : '') + this.nombre; }
+}
+const iterador = arr => { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; };
+const DRIVE = { contador: 0, carpetas: {}, archivos: {} };
+const RAIZ_DRIVE = new FakeFolder('Informes (raíz)', null);
+DRIVE.carpetas['16WlySidso2CAA5TwFklWmR-p4axkYb4N'] = RAIZ_DRIVE;
+
 /* ---------- Fakes de servicios ---------- */
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const dos = n => String(n).padStart(2, '0');
@@ -92,7 +141,22 @@ const respuestaHttp = (codigo, cuerpo) => ({
 const sandbox = {
   console,
   SpreadsheetApp: { getActiveSpreadsheet: () => LIBRO },
+  DriveApp: {
+    getFolderById: id => {
+      const f = DRIVE.carpetas[id];
+      if (!f) throw new Error('carpeta inexistente: ' + id);
+      return f;
+    },
+    getFileById: id => {
+      const a = DRIVE.archivos[id];
+      if (!a || a.papelera) throw new Error('archivo inexistente: ' + id);
+      return a;
+    }
+  },
   Utilities: {
+    newBlob: (bytes, mime, nombre) => new FakeBlob(bytes, mime, nombre),
+    base64Decode: s64 => Array.from(Buffer.from(s64, 'base64')),
+    base64Encode: bytes => Buffer.from(bytes).toString('base64'),
     formatDate(d, tz, fmt) {
       return fmt
         .replace('yyyy', d.getFullYear())
@@ -110,7 +174,8 @@ const sandbox = {
     })
   },
   LockService: {
-    getDocumentLock: () => ({ waitLock() {}, releaseLock() {} })
+    getDocumentLock: () => ({ waitLock() {}, releaseLock() {} }),
+    getScriptLock: () => ({ waitLock() {}, releaseLock() {} })
   },
   Session: {
     getActiveUser: () => ({ getEmail: () => 'yiber.medina@kaeser.com' }),
@@ -123,10 +188,13 @@ const sandbox = {
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 
-['Config.gs', 'Semana.gs', 'Usuarios.gs', 'Datos.gs', 'Kpis.gs', 'Informe.gs', 'Ia.gs', 'Correo.gs', 'Code.gs']
+['Config.gs', 'Semana.gs', 'Usuarios.gs', 'Adjuntos.gs', 'Datos.gs', 'Kpis.gs',
+ 'Informe.gs', 'Ia.gs', 'Correo.gs', 'Code.gs']
   .forEach(f => vm.runInContext(fs.readFileSync(path.join(DIR, f), 'utf8'), sandbox, { filename: f }));
 
 const S = sandbox;
+/** PNG de 1x1 px: sirve para probar el circuito de adjuntos sin archivos reales. */
+const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 let fallos = 0;
 function ok(cond, etiqueta, extra) {
   if (cond) { console.log('  ✔ ' + etiqueta); }
@@ -149,7 +217,7 @@ fs.readdirSync(DIR).sort().forEach(nombre => {
     ok(contenido.trim().charAt(0) === '<', nombre + ' es HTML');
   }
 });
-ok(fs.readdirSync(DIR).filter(n => n.endsWith('.gs')).length === 9, '9 archivos .gs');
+ok(fs.readdirSync(DIR).filter(n => n.endsWith('.gs')).length === 10, '10 archivos .gs');
 ok(fs.readdirSync(DIR).filter(n => n.endsWith('.html')).length === 3, '3 archivos .html');
 
 /* ===== 0b. Superficie pública =====
@@ -357,12 +425,17 @@ S.guardarRegistro_('Gestión Comercial', {
   campos: {
     ordenesPorSucursal: [{ sucursal: 'Bogotá', valorRecibido: '1.250.000.000' },
                          { sucursal: 'Medellín', valorRecibido: '640.000.000' }],
-    ordenesRelevantes: [{ asesor: 'Ana Gómez', cliente: 'Nestlé', tipoVenta: 'Equipo nuevo', valor: '480.000.000' }],
+    ordenesRelevantes: [{ nombre: 'ordenes.png', mime: 'image/png', base64: PNG_1x1 }],
     metricasFacturacion: [{ kpi: 'Facturación mes', valor: '3.900.000.000' },
                           { kpi: 'Cumplimiento forecast', valor: '92' }],
-    kpisConvenios: [{ metaAnual: '60', activos: '48', nuevos: '3', cancelados: '1' }],
-    distribuidores: [{ distribuidor: 'Kaeser Ecuador', ocValor: 'OC 4412 / $210.000', actividad: 'Entrenamiento' }],
-    negociacionesAltoImpacto: 'Negociación con Cerrejón en revisión de precios.'
+    kpisConvenios: [{ nombre: 'convenios.png', mime: 'image/png', base64: PNG_1x1 }],
+    distribuidores: [{ distribuidor: 'AC 2000', ocValor: 'OC 4412 / $210.000', actividad: 'Entrenamiento' },
+                     { distribuidor: 'Kaeser Ecuador', ocValor: 'OC 4499', actividad: 'Visita' }],
+    negociacionesAltoImpacto: {
+      encabezados: ['Cliente', 'Producto', 'Precio actual', 'Precio propuesto', 'Estado'],
+      filas: [['Cerrejón', 'CSD 125', '820.000.000', '790.000.000', 'En revisión'],
+              ['Drummond', 'DSD 175', '1.150.000.000', '1.120.000.000', 'Aprobada']]
+    }
   }
 });
 S.guardarRegistro_('Soporte Técnico', {
@@ -370,8 +443,9 @@ S.guardarRegistro_('Soporte Técnico', {
   campos: {
     equiposDetenidos: [{ cliente: 'Ecopetrol', equipo: 'EMR-7781', falla: 'Sensor de vibración',
                          estado: 'En diagnóstico', observacion: '' }],
-    firstTimeFix: [{ totalNotificaciones: '210', ftf: '87,5', visitasAdicionales: '26' }],
-    metricasEmergencia: [{ kpi: 'Llamadas atendidas', valor: '54' }],
+    firstTimeFix: [{ nombre: 'ftf.png', mime: 'image/png', base64: PNG_1x1,
+                     comentario: '87,5% de FTF; las 26 visitas adicionales se concentran en Cali.' }],
+    metricasEmergencia: [{ nombre: 'emergencia.png', mime: 'image/png', base64: PNG_1x1 }],
     analisisVibraciones: [{ estado: 'Alerta', cantidad: '3' }],
     centroMonitoreo: 'Se activaron 5 alarmas remotas.'
   }
@@ -406,7 +480,10 @@ S.guardarRegistro_('Directores', {
       { metrica: 'Forecast del trimestre', valor: '11.500.000.000', observacion: 'Ajustado al alza' }
     ],
     ordenesImportantes: [{ cliente: 'Alpina', monto: '320.000.000' }],
-    estadoContratos: [{ estado: 'Vigentes', cantidad: '48' }],
+    estadoContratos: [
+      { asesor: 'Ana Gómez', meta: '20', vigentes: '18', cumplimiento: '90', vencidos: '2' },
+      { asesor: 'Luis Rodriguez', meta: '15', vigentes: '15', cumplimiento: '100', vencidos: '0' }
+    ],
     notasCredito: 'Una nota crédito por despacho errado, resuelta.'
   }
 });
@@ -448,7 +525,9 @@ ok(md.slice(md.indexOf('## 👥')).indexOf('Analista DPA') >= 0,
    'la vacante cerrada sí aparece en Desarrollo de Personal');
 ok(md.indexOf('$1.890.000.000') >= 0, 'suma de OC por sucursal formateada',
    (md.match(/total \*\*\$[\d.]+/) || [])[0]);
-ok(md.indexOf('87,5% FTF') >= 0 || md.indexOf('**87,5% FTF**') >= 0, 'FTF reportado');
+ok(md.indexOf('Indicador FTF') >= 0 && md.indexOf('las 26 visitas adicionales') >= 0,
+   'el FTF aparece como adjunto con el comentario del área',
+   (md.match(/Indicador FTF[^\n]*/) || [])[0]);
 ok(md.indexOf('Facturación acumulada: **3.900.000.000**') >= 0,
    'la métrica clave se lee con su nombre en el informe',
    (md.match(/Facturación acumulada[^\n]*/) || [])[0]);
@@ -655,6 +734,146 @@ ok(S.__correo.to === 'gerencia@kaeser.com', 'destinatario correcto');
 ok(S.__correo.subject.indexOf('Semana 31') >= 0, 'asunto con la semana', S.__correo.subject);
 ok(S.__correo.htmlBody.indexOf('KAESER COMPRESORES') >= 0, 'cuerpo HTML con la plantilla');
 ok(S.__correo.body.indexOf('## 📋 RESUMEN EJECUTIVO') >= 0, 'cuerpo alterno en texto plano');
+delete PROPS.GEMINI_API_KEY;
+
+/* ===== 12. Listas desplegables ===== */
+console.log('\n[12] Listas desplegables');
+const colSucursal = S.ESQUEMA['Gestión Comercial'].campos
+  .find(c => c.clave === 'ordenesPorSucursal').columnas.find(c => c.clave === 'sucursal');
+ok(JSON.stringify(colSucursal.opciones) === JSON.stringify(
+     ['Zona Norte', 'Zona Centro', 'Antioquia', 'Zona Occidente',
+      'Cundinamarca', 'Zona Santanderes']),
+   'Sucursal ofrece las seis zonas pedidas', colSucursal.opciones);
+ok(!colSucursal.abierta, 'Sucursal es lista cerrada: no se puede escribir otra cosa');
+
+const colDistribuidor = S.ESQUEMA['Gestión Comercial'].campos
+  .find(c => c.clave === 'distribuidores').columnas.find(c => c.clave === 'distribuidor');
+['AC 2000', 'PETROSYSTEMS', 'AMERICAN DRY', 'BDC INTERNATIONAL'].forEach(d => {
+  ok(colDistribuidor.opciones.indexOf(d) >= 0, 'Distribuidor incluye ' + d);
+});
+ok(colDistribuidor.abierta === true,
+   'Distribuidor es lista abierta: admite uno nuevo sin tocar el código');
+ok(S.leerRegistro_('Gestión Comercial', P.anio, P.semana, 'Carlos Alberto Arbeláez')
+    .campos.distribuidores.filas[1].distribuidor === 'Kaeser Ecuador',
+   'y de hecho guarda un distribuidor fuera de la lista');
+
+/* ===== 13. Adjuntos en Drive ===== */
+console.log('\n[13] Adjuntos en Google Drive');
+const regGc = S.leerRegistro_('Gestión Comercial', P.anio, P.semana, 'Carlos Alberto Arbeláez');
+const adjOrdenes = regGc.campos.ordenesRelevantes.filas;
+ok(adjOrdenes.length === 1, 'la imagen quedó registrada en la celda');
+ok(/drive\.google\.com\/file\/d\//.test(adjOrdenes[0].enlace),
+   'la celda guarda el enlace de Drive, no los bytes', adjOrdenes[0].enlace);
+ok(adjOrdenes[0].nombre.indexOf('S31 - Órdenes Relevantes - Carlos') === 0,
+   'el archivo se nombra con semana, indicador y colaborador', adjOrdenes[0].nombre);
+
+const archivoSubido = Object.values(DRIVE.archivos).find(
+  a => a.getName().indexOf('Órdenes Relevantes') >= 0 && !a.papelera);
+ok(archivoSubido.carpeta.ruta() ===
+   'Informes (raíz)/2026/Semana 31 (27 jul – 02 ago)/Gestión Comercial',
+   'el árbol de carpetas es raíz/año/semana/área', archivoSubido.carpeta.ruta());
+
+/* Reenviar el reporte no debe duplicar el archivo en Drive. */
+const idAnterior = archivoSubido.getId();
+S.guardarRegistro_('Gestión Comercial', {
+  anio: P.anio, semana: P.semana, nombre: 'Carlos Alberto Arbeláez',
+  campos: { ordenesRelevantes: [{ nombre: 'ordenes.png', mime: 'image/png', base64: PNG_1x1 }] }
+});
+const vivos = Object.values(DRIVE.archivos)
+  .filter(a => a.getName().indexOf('Órdenes Relevantes') >= 0 && !a.papelera);
+ok(vivos.length === 1, 'volver a subir reemplaza el archivo en vez de duplicarlo',
+   vivos.map(a => a.getName()));
+ok(DRIVE.archivos[idAnterior].papelera === true, 'el archivo anterior queda en la papelera');
+
+/* Un adjunto ya guardado se conserva sin volver a subirlo. */
+const antesDeReenviar = Object.keys(DRIVE.archivos).length;
+S.guardarRegistro_('Gestión Comercial', {
+  anio: P.anio, semana: P.semana, nombre: 'Carlos Alberto Arbeláez',
+  campos: { ordenesRelevantes: [{ nombre: vivos[0].getName(),
+                                  enlace: 'https://drive.google.com/file/d/' + vivos[0].getId() + '/view' }] }
+});
+ok(Object.keys(DRIVE.archivos).length === antesDeReenviar,
+   'reenviar sin bytes nuevos no crea archivos en Drive');
+
+/* El comentario del área viaja junto al indicador. */
+const regSoporte = S.leerRegistro_('Soporte Técnico', P.anio, P.semana, 'Edilfonso Vaca');
+ok(regSoporte.campos.firstTimeFix.filas[0].comentario.indexOf('87,5%') >= 0,
+   'el comentario del FTF se guarda junto a la imagen',
+   regSoporte.campos.firstTimeFix.filas[0].comentario);
+
+/* Tope de peso. */
+let errPeso = '';
+try {
+  S.guardarAdjunto_({ anio: 2026, semana: 31, area: 'DPA', colaborador: 'X', campo: 'Y' },
+    { nombre: 'grande.png', mime: 'image/png', base64: 'A'.repeat(13 * 1024 * 1024) });
+} catch (e) { errPeso = e.message; }
+ok(errPeso.indexOf('máximo es 8 MB') >= 0, 'rechaza archivos por encima del tope', errPeso);
+
+/* ===== 14. Tabla pegada desde Excel ===== */
+console.log('\n[14] Tabla importada desde Excel');
+const tablaNeg = regGc.campos.negociacionesAltoImpacto.tabla;
+ok(JSON.stringify(tablaNeg.encabezados) ===
+   JSON.stringify(['Cliente', 'Producto', 'Precio actual', 'Precio propuesto', 'Estado']),
+   'conserva los encabezados originales de Excel', tablaNeg.encabezados);
+ok(tablaNeg.filas.length === 2 && tablaNeg.filas[0][0] === 'Cerrejón',
+   'y las filas con su estructura', tablaNeg.filas[0]);
+ok(md.indexOf('| Cliente | Producto |') >= 0,
+   'el informe la reproduce como tabla, no como texto plano');
+ok(md.indexOf('| Cerrejón | CSD 125 |') >= 0, 'con sus datos');
+
+/* ===== 15. Gemini con imágenes ===== */
+console.log('\n[15] Gemini interpreta las imágenes adjuntas');
+/* La sección anterior guardó Gestión Comercial de forma parcial (a propósito),
+   lo que vació las demás imágenes. Se restaura el reporte completo antes de
+   medir cuántas llegan a Gemini. */
+S.guardarRegistro_('Gestión Comercial', {
+  anio: P.anio, semana: P.semana, nombre: 'Carlos Alberto Arbeláez',
+  campos: {
+    ordenesRelevantes: [{ nombre: 'ordenes.png', mime: 'image/png', base64: PNG_1x1 }],
+    kpisConvenios: [{ nombre: 'convenios.png', mime: 'image/png', base64: PNG_1x1 }]
+  }
+});
+PROPS.GEMINI_API_KEY = 'clave-de-prueba';
+let peticionIa = null;
+FETCH = (url, opciones) => {
+  peticionIa = JSON.parse(opciones.payload);
+  return respuestaHttp(200, {
+    candidates: [{ content: { parts: [{ text: '## 📋 RESUMEN EJECUTIVO\n\nSemana estable.' }] },
+                   finishReason: 'STOP' }]
+  });
+};
+const conImagenes = S.construirInforme_(P.anio, P.semana, true);
+ok(conImagenes.fuente === 'ia', 'el informe se redacta con Gemini');
+
+const partesIa = peticionIa.contents[0].parts;
+const partesImagen = partesIa.filter(p => p.inline_data);
+ok(partesImagen.length === 4,
+   'se envían las 4 imágenes de la semana como inline_data', partesImagen.length);
+ok(partesImagen.every(p => p.mime_type === undefined && p.inline_data.mime_type === 'image/png'),
+   'con su tipo MIME dentro de inline_data');
+ok(partesIa.some(p => p.text && p.text.indexOf('indicador "First Time Fix Rate (FTF)"') >= 0),
+   'cada imagen va rotulada con su área e indicador');
+ok(partesIa.some(p => p.text && p.text.indexOf('Comentario del área: 87,5%') >= 0),
+   'y el comentario del área acompaña al indicador');
+ok(conImagenes.imagenesLeidas === 4, 'se informa cuántas imágenes leyó', conImagenes.imagenesLeidas);
+ok(conImagenes.aviso === '', 'sin imágenes omitidas no hay aviso');
+
+/* Si una imagen desaparece de Drive, el informe sale igual y lo advierte. */
+const vivoActual = Object.values(DRIVE.archivos).find(
+  a => a.getName().indexOf('Órdenes Relevantes') >= 0 && !a.papelera);
+vivoActual.setTrashed(true);
+const conFaltante = S.construirInforme_(P.anio, P.semana, true);
+ok(conFaltante.fuente === 'ia', 'un adjunto borrado no impide redactar el informe');
+ok(conFaltante.aviso.indexOf('ya no está en Drive') >= 0,
+   'pero se advierte cuál falta', conFaltante.aviso);
+vivoActual.setTrashed(false);
+
+/* Tope de imágenes por petición. */
+S.CONFIG.IA_MAX_IMAGENES = 2;
+const conTope = S.construirInforme_(P.anio, P.semana, true);
+ok(conTope.imagenesLeidas === 2, 'respeta el máximo de imágenes por petición');
+ok(conTope.aviso.indexOf('máximo de 2 imágenes') >= 0, 'y explica por qué omitió el resto');
+S.CONFIG.IA_MAX_IMAGENES = 12;
 delete PROPS.GEMINI_API_KEY;
 
 if (process.env.VER) { console.log('\n===== INFORME =====\n' + md); }

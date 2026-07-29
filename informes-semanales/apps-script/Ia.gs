@@ -72,7 +72,24 @@ function datosParaIa_(consolidado) {
         var dato = reg.campos[campo.clave];
         if (!dato) continue;
 
-        if (campo.tipo === 'tabla') {
+        if (campo.tipo === 'imagen') {
+          if (!dato.filas || !dato.filas.length) continue;
+          // Los bytes van aparte, como partes de imagen. Aquí sólo queda el
+          // aviso de que existen, y el comentario, que sí es texto del área.
+          item[campo.titulo] = dato.filas.map(function (f) {
+            return f.comentario
+              ? 'Imagen adjunta (' + f.nombre + '). Comentario del área: ' + f.comentario
+              : 'Imagen adjunta (' + f.nombre + ').';
+          });
+          tieneAlgo = true;
+        } else if (campo.tipo === 'tablaLibre') {
+          if (!dato.tabla || !dato.tabla.filas.length) continue;
+          item[campo.titulo] = {
+            encabezados: dato.tabla.encabezados,
+            filas: dato.tabla.filas
+          };
+          tieneAlgo = true;
+        } else if (campo.tipo === 'tabla') {
           if (!dato.filas || !dato.filas.length) continue;
           item[campo.titulo] = dato.filas;
           tieneAlgo = true;
@@ -89,6 +106,88 @@ function datosParaIa_(consolidado) {
 
   salida.metricas = kpisDeSemana_(consolidado.anio, consolidado.semana);
   return salida;
+}
+
+/**
+ * Reúne las imágenes adjuntas de la semana para enviarlas a Gemini.
+ *
+ * Punto importante de arquitectura: **Gemini no puede leer una carpeta de
+ * Drive**. `generateContent` sólo acepta bytes en línea (`inline_data`) o URIs
+ * de su propia Files API; no tiene conector a Drive. Lo que hacemos es leer los
+ * archivos desde Drive con `DriveApp` y adjuntarlos a la petición, con lo que se
+ * consigue el mismo objetivo: el modelo interpreta las imágenes al redactar.
+ *
+ * Cada imagen va precedida de una parte de texto que dice de qué área y de qué
+ * indicador es; sin ese rótulo el modelo recibe capturas sin contexto.
+ *
+ * @return {Object} { partes: [...], incluidas: n, omitidas: [motivos] }
+ */
+function imagenesParaIa_(consolidado) {
+  var partes = [];
+  var omitidas = [];
+  var incluidas = 0;
+  var pesoTotal = 0;
+  var maximoBytes = CONFIG.IA_MAX_MB_IMAGENES * 1024 * 1024;
+
+  for (var a = 0; a < ORDEN_AREAS.length; a++) {
+    var area = ORDEN_AREAS[a];
+    var def = ESQUEMA[area];
+    var registros = consolidado.areas[area] || [];
+
+    for (var r = 0; r < registros.length; r++) {
+      var reg = registros[r];
+
+      for (var c = 0; c < def.campos.length; c++) {
+        var campo = def.campos[c];
+        if (campo.tipo !== 'imagen') continue;
+
+        var dato = reg.campos[campo.clave];
+        if (!dato || !dato.filas) continue;
+
+        for (var f = 0; f < dato.filas.length; f++) {
+          var adjunto = dato.filas[f];
+          if (!adjunto.enlace) continue;
+
+          if (incluidas >= CONFIG.IA_MAX_IMAGENES) {
+            omitidas.push(adjunto.nombre + ' (se superó el máximo de ' +
+                          CONFIG.IA_MAX_IMAGENES + ' imágenes)');
+            continue;
+          }
+
+          var blob = leerAdjunto_(adjunto.enlace);
+          if (!blob) {
+            omitidas.push(adjunto.nombre + ' (ya no está en Drive)');
+            continue;
+          }
+
+          var bytes = blob.getBytes();
+          if (pesoTotal + bytes.length > maximoBytes) {
+            omitidas.push(adjunto.nombre + ' (se superó el peso máximo de ' +
+                          CONFIG.IA_MAX_MB_IMAGENES + ' MB)');
+            continue;
+          }
+
+          var mime = blob.getContentType() || 'image/png';
+          if (CONFIG.ADJUNTO_MIMES_IMAGEN.indexOf(mime) < 0) {
+            omitidas.push(adjunto.nombre + ' (tipo no interpretable: ' + mime + ')');
+            continue;
+          }
+
+          partes.push({ text:
+            'Imagen adjunta — área ' + area + ', indicador "' + campo.titulo +
+            '", reportada por ' + reg.nombre +
+            (adjunto.comentario ? '. Comentario del área: ' + adjunto.comentario : '') +
+            '. Lee las cifras de la imagen y úsalas en el informe.' });
+          partes.push({ inline_data: { mime_type: mime, data: Utilities.base64Encode(bytes) } });
+
+          pesoTotal += bytes.length;
+          incluidas++;
+        }
+      }
+    }
+  }
+
+  return { partes: partes, incluidas: incluidas, omitidas: omitidas };
 }
 
 /** Mensaje legible para los motivos de bloqueo o corte más comunes. */
@@ -119,14 +218,24 @@ function informeConIa_(consolidado) {
     return { ok: false, motivo: 'No hay reportes cargados para esta semana.' };
   }
 
+  var imagenes = imagenesParaIa_(consolidado);
+
   var mensaje =
     'Redacta el informe gerencial de la ' + consolidado.etiqueta + '.\n\n' +
     'Estos son todos los datos reportados por las áreas, en JSON:\n\n' +
-    '```json\n' + JSON.stringify(datos, null, 1) + '\n```';
+    '```json\n' + JSON.stringify(datos, null, 1) + '\n```' +
+    (imagenes.incluidas
+      ? '\n\nAdemás se adjuntan ' + imagenes.incluidas + ' imagen(es) con ' +
+        'indicadores. Cada una viene rotulada con su área y su indicador: ' +
+        'extrae de ellas las cifras y trátalas como parte del reporte de esa ' +
+        'área, no como material aparte.'
+      : '');
+
+  var partes = [{ text: mensaje }].concat(imagenes.partes);
 
   var cuerpo = {
     systemInstruction: { parts: [{ text: DIRECTRICES_INFORME }] },
-    contents: [{ role: 'user', parts: [{ text: mensaje }] }],
+    contents: [{ role: 'user', parts: partes }],
     generationConfig: {
       temperature: 0.35,
       topP: 0.95,
@@ -208,5 +317,10 @@ function informeConIa_(consolidado) {
     markdown += '\n\n_(El análisis se truncó por límite de tokens de salida.)_';
   }
 
-  return { ok: true, markdown: markdown };
+  return {
+    ok: true,
+    markdown: markdown,
+    imagenesLeidas: imagenes.incluidas,
+    imagenesOmitidas: imagenes.omitidas
+  };
 }

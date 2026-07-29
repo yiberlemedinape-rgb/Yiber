@@ -62,6 +62,32 @@ var CONFIG = {
   /** Techo de tokens de salida (incluye los tokens de razonamiento). */
   IA_MAX_TOKENS: 16384,
 
+  /* ---------- Adjuntos en Google Drive ---------- */
+
+  /**
+   * Carpeta raíz donde se guardan las imágenes y tablas adjuntas.
+   * Es el ID de la carpeta compartida por la gerencia. Se puede sustituir sin
+   * tocar código con la propiedad de script CARPETA_DRIVE.
+   */
+  DRIVE_CARPETA_RAIZ: '16WlySidso2CAA5TwFklWmR-p4axkYb4N',
+  PROP_CARPETA_DRIVE: 'CARPETA_DRIVE',
+
+  /** Peso máximo por archivo adjunto (MB). */
+  ADJUNTO_MAX_MB: 8,
+
+  /** Tipos aceptados como imagen. */
+  ADJUNTO_MIMES_IMAGEN: ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'],
+
+  /**
+   * Cuántas imágenes se envían a Gemini y cuánto pueden pesar en total.
+   *
+   * Gemini no lee carpetas de Drive: los bytes viajan dentro de la petición
+   * (`inline_data`), y una petición con datos en línea no debe superar ~20 MB.
+   * Estos topes dejan margen para el texto del informe.
+   */
+  IA_MAX_IMAGENES: 12,
+  IA_MAX_MB_IMAGENES: 14,
+
   /**
    * Qué ve el Administrador en la interfaz web.
    *
@@ -106,6 +132,35 @@ var DIRECTRICES_INFORME =
   '- Si un área no reportó, dilo explícitamente en una línea en vez de omitirla.\n' +
   '- Prioriza lo excepcional sobre lo rutinario: la gerencia lee esto para decidir.\n' +
   '- No incluyas preámbulos ni cierres; empieza directamente en el primer título.';
+
+/* ===================== Listas desplegables ===================== */
+
+/**
+ * Sucursales. Lista **cerrada**: la columna se muestra como desplegable y el
+ * usuario sólo puede elegir uno de estos valores. Mantenerla cerrada es lo que
+ * permite agrupar las órdenes por sucursal semana a semana sin que "Antioquia",
+ * "ANTIOQUIA" y "Ant." se conviertan en tres series distintas.
+ */
+var SUCURSALES = [
+  'Zona Norte',
+  'Zona Centro',
+  'Antioquia',
+  'Zona Occidente',
+  'Cundinamarca',
+  'Zona Santanderes'
+];
+
+/**
+ * Distribuidores internacionales. Lista **abierta** (`abierta: true` en la
+ * columna): se sugieren estos, pero el usuario puede escribir uno nuevo sin
+ * esperar a que se agregue aquí.
+ */
+var DISTRIBUIDORES = [
+  'AC 2000',
+  'PETROSYSTEMS',
+  'AMERICAN DRY',
+  'BDC INTERNATIONAL'
+];
 
 /**
  * Alias de cargo → hoja. La hoja "Usuario" se llena a mano, así que se aceptan
@@ -209,10 +264,19 @@ var ESQUEMA = {
         titulo: 'Estado de Contratos (Convenios)',
         encabezado: 'Estado de Contratos (Convenios)',
         columnas: [
-          { clave: 'estado', titulo: 'Estado' },
-          { clave: 'cantidad', titulo: 'Cantidad', tipo: 'numero' }
+          { clave: 'asesor', titulo: 'ASESOR' },
+          { clave: 'meta', titulo: 'META', tipo: 'numero' },
+          { clave: 'vigentes', titulo: 'VIGENTES', tipo: 'numero' },
+          { clave: 'cumplimiento', titulo: '% CUMPL.', tipo: 'numero' },
+          { clave: 'vencidos', titulo: 'VENCIDOS', tipo: 'numero' }
         ],
-        kpis: [{ metrica: 'Contratos', valorCol: 'cantidad', etiquetaCol: 'estado' }] },
+        kpis: [
+          { metrica: 'Convenios vigentes', valorCol: 'vigentes', etiquetaCol: 'asesor' },
+          { metrica: 'Convenios vencidos', valorCol: 'vencidos', etiquetaCol: 'asesor' },
+          { metrica: '% Cumplimiento convenios', valorCol: 'cumplimiento', etiquetaCol: 'asesor' },
+          { metrica: 'Convenios vigentes — total', valorCol: 'vigentes', agregacion: 'suma' },
+          { metrica: 'Convenios vencidos — total', valorCol: 'vencidos', agregacion: 'suma' }
+        ] },
 
       { col: 'J', clave: 'notasCredito', tipo: 'texto', lineas: 4,
         titulo: 'Notas Crédito, Quejas y Reclamos',
@@ -333,7 +397,7 @@ var ESQUEMA = {
         titulo: 'Órdenes de Compra por Sucursal',
         encabezado: 'Órdenes de Compra por Sucursal',
         columnas: [
-          { clave: 'sucursal', titulo: 'Sucursal' },
+          { clave: 'sucursal', titulo: 'Sucursal', opciones: SUCURSALES },
           { clave: 'valorRecibido', titulo: 'Valor Recibido', tipo: 'numero' }
         ],
         kpis: [
@@ -341,15 +405,11 @@ var ESQUEMA = {
           { metrica: 'OC recibidas — total ($)', valorCol: 'valorRecibido', agregacion: 'suma' }
         ] },
 
-      { col: 'E', clave: 'ordenesRelevantes', tipo: 'tabla',
+      { col: 'E', clave: 'ordenesRelevantes', tipo: 'imagen',
         titulo: 'Órdenes Relevantes',
         encabezado: 'Órdenes Relevantes',
-        columnas: [
-          { clave: 'asesor', titulo: 'Asesor' },
-          { clave: 'cliente', titulo: 'Cliente' },
-          { clave: 'tipoVenta', titulo: 'Tipo de Venta' },
-          { clave: 'valor', titulo: 'Valor', tipo: 'numero' }
-        ] },
+        ayuda: 'Adjunta la captura del reporte. Puedes pegarla con Ctrl+V, ' +
+               'arrastrarla o elegir el archivo.' },
 
       { col: 'F', clave: 'metricasFacturacion', tipo: 'tabla',
         titulo: 'Métricas de Facturación y Cumplimiento',
@@ -360,33 +420,26 @@ var ESQUEMA = {
         ],
         kpis: [{ metrica: '', valorCol: 'valor', etiquetaCol: 'kpi' }] },
 
-      { col: 'G', clave: 'kpisConvenios', tipo: 'tabla',
+      { col: 'G', clave: 'kpisConvenios', tipo: 'imagen',
         titulo: 'KPIs de Convenios',
         encabezado: 'KPIs de Convenios',
-        columnas: [
-          { clave: 'metaAnual', titulo: 'Meta Anual', tipo: 'numero' },
-          { clave: 'activos', titulo: 'Activos', tipo: 'numero' },
-          { clave: 'nuevos', titulo: 'Nuevos', tipo: 'numero' },
-          { clave: 'cancelados', titulo: 'Cancelados', tipo: 'numero' }
-        ],
-        kpis: [
-          { metrica: 'Convenios activos', valorCol: 'activos', agregacion: 'suma' },
-          { metrica: 'Convenios nuevos', valorCol: 'nuevos', agregacion: 'suma' },
-          { metrica: 'Convenios cancelados', valorCol: 'cancelados', agregacion: 'suma' }
-        ] },
+        ayuda: 'Adjunta la captura del tablero de convenios.' },
 
       { col: 'H', clave: 'distribuidores', tipo: 'tabla',
         titulo: 'Distribuidores Internacionales',
         encabezado: 'Distribuidores Internacionales',
         columnas: [
-          { clave: 'distribuidor', titulo: 'Distribuidor' },
+          { clave: 'distribuidor', titulo: 'Distribuidor',
+            opciones: DISTRIBUIDORES, abierta: true },
           { clave: 'ocValor', titulo: 'OC / Valor' },
           { clave: 'actividad', titulo: 'Actividad' }
         ] },
 
-      { col: 'I', clave: 'negociacionesAltoImpacto', tipo: 'texto', lineas: 4,
+      { col: 'I', clave: 'negociacionesAltoImpacto', tipo: 'tablaLibre',
         titulo: 'Negociaciones de Alto Impacto y Precios',
-        encabezado: 'Negociaciones de Alto Impacto y Precios' },
+        encabezado: 'Negociaciones de Alto Impacto y Precios',
+        ayuda: 'Copia el rango en Excel y pégalo aquí con Ctrl+V: se conserva ' +
+               'la estructura original, con sus encabezados y columnas.' },
 
       { col: 'J', clave: 'entrenamientosMarketing', tipo: 'texto', lineas: 4,
         titulo: 'Entrenamientos, Visitas y Marketing',
@@ -470,27 +523,16 @@ var ESQUEMA = {
           { clave: 'avance', titulo: 'Avance' }
         ] },
 
-      { col: 'G', clave: 'metricasEmergencia', tipo: 'tabla',
+      { col: 'G', clave: 'metricasEmergencia', tipo: 'imagen',
         titulo: 'Métricas Línea de Emergencia',
         encabezado: 'Métricas Línea de Emergencia',
-        columnas: [
-          { clave: 'kpi', titulo: 'KPI' },
-          { clave: 'valor', titulo: 'Valor', tipo: 'numero' }
-        ],
-        kpis: [{ metrica: 'Línea de emergencia', valorCol: 'valor', etiquetaCol: 'kpi' }] },
+        ayuda: 'Adjunta la captura del tablero de la línea de emergencia.' },
 
-      { col: 'H', clave: 'firstTimeFix', tipo: 'tabla',
+      { col: 'H', clave: 'firstTimeFix', tipo: 'imagen', comentario: true,
         titulo: 'First Time Fix Rate (FTF)',
         encabezado: 'First Time Fix Rate (FTF)',
-        columnas: [
-          { clave: 'totalNotificaciones', titulo: 'Total Notificaciones', tipo: 'numero' },
-          { clave: 'ftf', titulo: '% FTF', tipo: 'numero' },
-          { clave: 'visitasAdicionales', titulo: 'Visitas Adicionales', tipo: 'numero' }
-        ],
-        kpis: [
-          { metrica: '% FTF', valorCol: 'ftf', agregacion: 'promedio' },
-          { metrica: 'Visitas adicionales', valorCol: 'visitasAdicionales', agregacion: 'suma' }
-        ] },
+        ayuda: 'Adjunta el indicador y escribe el análisis del área de soporte ' +
+               'en el comentario: es lo que la gerencia lee junto a la cifra.' },
 
       { col: 'I', clave: 'fallasFrecuentes', tipo: 'texto', lineas: 4,
         titulo: 'Análisis de Fallas Frecuentes',

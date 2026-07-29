@@ -155,6 +155,10 @@ function pintarFormulario(registro) {
 
     if (campo.tipo === 'tabla') {
       bloque.appendChild(construirTabla(campo, valores[campo.clave] || []));
+    } else if (campo.tipo === 'imagen') {
+      bloque.appendChild(construirImagen(campo, valores[campo.clave] || []));
+    } else if (campo.tipo === 'tablaLibre') {
+      bloque.appendChild(construirTablaLibre(campo, valores[campo.clave] || null));
     } else {
       bloque.appendChild(construirTexto(campo, valores[campo.clave] || ''));
     }
@@ -210,6 +214,57 @@ function construirTabla(campo, filas) {
   return contenedor;
 }
 
+/**
+ * Control de una celda de tabla según la definición de la columna.
+ *
+ *   opciones sin `abierta`  → <select>: lista cerrada, el usuario sólo elige.
+ *   opciones con `abierta`  → <input> + <datalist>: sugiere, pero deja escribir.
+ *   sin opciones            → <input> de texto.
+ *
+ * La distinción no es cosmética: una lista cerrada es lo que garantiza que
+ * "Antioquia" se escriba siempre igual y las series de KPI no se fragmenten.
+ */
+function controlDeColumna(col, valor) {
+  if (col.opciones && !col.abierta) {
+    var select = crear('select', {
+      'data-col': col.clave,
+      onchange: function () { SUCIO = true; }
+    });
+    select.appendChild(crear('option', { value: '', texto: '— elegir —' }));
+    col.opciones.forEach(function (op) {
+      select.appendChild(crear('option', { value: op, texto: op }));
+    });
+    // Si lo guardado ya no está en la lista, se conserva para no perder el dato.
+    if (valor && col.opciones.indexOf(valor) < 0) {
+      select.appendChild(crear('option', { value: valor, texto: valor + ' (fuera de lista)' }));
+    }
+    select.value = valor || '';
+    return select;
+  }
+
+  var input = crear('input', {
+    type: 'text',
+    'data-col': col.clave,
+    placeholder: col.titulo,
+    value: valor,
+    oninput: function () { SUCIO = true; }
+  });
+  if (col.tipo === 'numero') input.setAttribute('inputmode', 'decimal');
+
+  if (col.opciones && col.abierta) {
+    var idLista = 'lista-' + col.clave;
+    input.setAttribute('list', idLista);
+    if (!document.getElementById(idLista)) {
+      var datalist = crear('datalist', { id: idLista });
+      col.opciones.forEach(function (op) {
+        datalist.appendChild(crear('option', { value: op }));
+      });
+      document.body.appendChild(datalist);
+    }
+  }
+  return input;
+}
+
 /** Fila indicadora de "sin datos" que desaparece al agregar la primera fila. */
 function filaVacia(tbody, campo) {
   var tr = crear('tr', { clase: 'vacia' });
@@ -227,15 +282,8 @@ function agregarFila(tbody, campo, valores) {
   var tr = crear('tr');
   campo.columnas.forEach(function (col) {
     var td = crear('td');
-    var input = crear('input', {
-      type: 'text',
-      'data-col': col.clave,
-      placeholder: col.titulo,
-      value: valores ? (valores[col.clave] || '') : '',
-      oninput: function () { SUCIO = true; }
-    });
-    if (col.tipo === 'numero') input.setAttribute('inputmode', 'decimal');
-    td.appendChild(input);
+    var valor = valores ? (valores[col.clave] || '') : '';
+    td.appendChild(controlDeColumna(col, valor));
     tr.appendChild(td);
   });
 
@@ -253,12 +301,281 @@ function agregarFila(tbody, campo, valores) {
   return tr;
 }
 
+/* ===================== Campos de imagen ===================== */
+
+/** Estado en memoria de los adjuntos, por clave de campo. */
+var ADJUNTOS = {};
+
+var MAX_MB_ADJUNTO = 8;
+
+/**
+ * Zona para adjuntar imágenes: acepta pegado (Ctrl+V), arrastre y selección
+ * de archivo. Los bytes viajan en base64 al servidor sólo la primera vez; una
+ * vez en Drive, lo que se conserva es el enlace.
+ */
+function construirImagen(campo, guardados) {
+  ADJUNTOS[campo.clave] = (guardados || []).map(function (a) {
+    return { nombre: a.nombre, enlace: a.enlace, comentario: a.comentario || '' };
+  });
+
+  var cont = crear('div');
+  var zona = crear('div', {
+    clase: 'zona-adjunto', tabindex: '0',
+    html: '<b>Pega una imagen con Ctrl+V</b>, arrástrala aquí o ' +
+          '<span class="enlace-falso">elige un archivo</span>' +
+          '<div class="pista">PNG, JPG o WEBP · máximo ' + MAX_MB_ADJUNTO + ' MB</div>'
+  });
+
+  var entrada = crear('input', { type: 'file', accept: 'image/*', multiple: 'multiple' });
+  entrada.style.display = 'none';
+
+  var lista = crear('div', { clase: 'lista-adjuntos' });
+
+  // Pegado: el navegador entrega la imagen del portapapeles como File.
+  zona.addEventListener('paste', function (e) {
+    var items = (e.clipboardData || window.clipboardData).items || [];
+    var encontrada = false;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].kind === 'file' && items[i].type.indexOf('image/') === 0) {
+        agregarImagen(campo, items[i].getAsFile(), lista);
+        encontrada = true;
+      }
+    }
+    if (encontrada) e.preventDefault();
+  });
+
+  // Arrastrar y soltar.
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    zona.addEventListener(ev, function (e) {
+      e.preventDefault(); zona.classList.add('sobre');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    zona.addEventListener(ev, function (e) {
+      e.preventDefault(); zona.classList.remove('sobre');
+    });
+  });
+  zona.addEventListener('drop', function (e) {
+    var archivos = e.dataTransfer.files || [];
+    for (var i = 0; i < archivos.length; i++) agregarImagen(campo, archivos[i], lista);
+  });
+
+  zona.addEventListener('click', function () { entrada.click(); });
+  entrada.addEventListener('change', function () {
+    for (var i = 0; i < entrada.files.length; i++) agregarImagen(campo, entrada.files[i], lista);
+    entrada.value = '';
+  });
+
+  cont.appendChild(zona);
+  cont.appendChild(entrada);
+  cont.appendChild(lista);
+
+  if (campo.comentario) {
+    cont.appendChild(crear('label', {
+      clase: 'etiqueta-comentario',
+      texto: 'Comentario del área (se envía a la gerencia junto al indicador)'
+    }));
+    var ta = crear('textarea', {
+      rows: 3, 'data-comentario': campo.clave,
+      placeholder: 'Análisis de la cifra: qué explica el resultado y qué se está haciendo.',
+      oninput: function () { SUCIO = true; }
+    });
+    ta.value = (ADJUNTOS[campo.clave][0] || {}).comentario || '';
+    cont.appendChild(ta);
+  }
+
+  pintarAdjuntos(campo, lista);
+  return cont;
+}
+
+/** Convierte el archivo a base64 y lo agrega al estado del campo. */
+function agregarImagen(campo, archivo, lista) {
+  if (!archivo) return;
+  if (archivo.type.indexOf('image/') !== 0) {
+    alert('"' + archivo.name + '" no es una imagen.');
+    return;
+  }
+  if (archivo.size > MAX_MB_ADJUNTO * 1024 * 1024) {
+    alert('"' + archivo.name + '" pesa ' + (archivo.size / 1048576).toFixed(1) +
+          ' MB y el máximo es ' + MAX_MB_ADJUNTO + ' MB.');
+    return;
+  }
+
+  var lector = new FileReader();
+  lector.onload = function () {
+    // El resultado es "data:image/png;base64,XXXX": el servidor sólo quiere XXXX.
+    var base64 = String(lector.result).split(',')[1];
+    ADJUNTOS[campo.clave].push({
+      nombre: archivo.name || 'imagen.png',
+      mime: archivo.type,
+      base64: base64,
+      vistaPrevia: lector.result
+    });
+    SUCIO = true;
+    pintarAdjuntos(campo, lista);
+  };
+  lector.readAsDataURL(archivo);
+}
+
+/** Dibuja las miniaturas y los enlaces de lo ya adjuntado. */
+function pintarAdjuntos(campo, lista) {
+  lista.innerHTML = '';
+  var adjuntos = ADJUNTOS[campo.clave] || [];
+
+  if (!adjuntos.length) {
+    lista.appendChild(crear('div', { clase: 'pista', texto: 'Sin imágenes adjuntas.' }));
+    return;
+  }
+
+  adjuntos.forEach(function (a, indice) {
+    var item = crear('div', { clase: 'adjunto' });
+
+    if (a.vistaPrevia) {
+      item.appendChild(crear('img', { src: a.vistaPrevia, alt: a.nombre }));
+    } else {
+      item.appendChild(crear('div', { clase: 'sin-vista', texto: '🖼️' }));
+    }
+
+    var info = crear('div', { clase: 'info' });
+    info.appendChild(crear('div', { clase: 'nombre', texto: a.nombre }));
+    info.appendChild(crear('div', {
+      clase: 'pista',
+      texto: a.enlace ? 'Guardada en Drive' : 'Nueva · se subirá al guardar'
+    }));
+    if (a.enlace) {
+      info.appendChild(crear('a', { href: a.enlace, target: '_blank', texto: 'Abrir en Drive' }));
+    }
+    item.appendChild(info);
+
+    item.appendChild(crear('button', {
+      clase: 'fila', type: 'button', title: 'Quitar', texto: '×',
+      onclick: function () {
+        ADJUNTOS[campo.clave].splice(indice, 1);
+        SUCIO = true;
+        pintarAdjuntos(campo, lista);
+      }
+    }));
+
+    lista.appendChild(item);
+  });
+}
+
+/* ===================== Tablas pegadas desde Excel ===================== */
+
+/** Estado en memoria de las tablas libres, por clave de campo. */
+var TABLAS_LIBRES = {};
+
+/**
+ * Campo que recibe un rango copiado de Excel. El portapapeles entrega el rango
+ * como texto separado por tabuladores, así que se parsea tal cual y se conserva
+ * la estructura original: los encabezados son los de la hoja de origen.
+ */
+function construirTablaLibre(campo, guardada) {
+  TABLAS_LIBRES[campo.clave] = (guardada && guardada.filas)
+    ? { encabezados: guardada.encabezados || [], filas: guardada.filas || [] }
+    : { encabezados: [], filas: [] };
+
+  var cont = crear('div');
+  var zona = crear('div', {
+    clase: 'zona-adjunto', tabindex: '0',
+    html: '<b>Pega aquí el rango copiado de Excel (Ctrl+V)</b>' +
+          '<div class="pista">Se conservan los encabezados y las columnas ' +
+          'originales. La primera fila se toma como encabezado.</div>'
+  });
+
+  var vista = crear('div', { clase: 'tabla-envoltura' });
+
+  zona.addEventListener('paste', function (e) {
+    var texto = (e.clipboardData || window.clipboardData).getData('text/plain');
+    if (!texto) return;
+    e.preventDefault();
+    TABLAS_LIBRES[campo.clave] = parsearPegadoExcel(texto);
+    SUCIO = true;
+    pintarTablaLibre(campo, vista);
+  });
+
+  cont.appendChild(zona);
+  cont.appendChild(vista);
+  cont.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: 'Vaciar tabla',
+    onclick: function () {
+      TABLAS_LIBRES[campo.clave] = { encabezados: [], filas: [] };
+      SUCIO = true;
+      pintarTablaLibre(campo, vista);
+    }
+  }));
+
+  pintarTablaLibre(campo, vista);
+  return cont;
+}
+
+/** Convierte el TSV del portapapeles en { encabezados, filas }. */
+function parsearPegadoExcel(texto) {
+  var lineas = String(texto).replace(/\r\n/g, '\n').split('\n')
+    .filter(function (l) { return l.trim().length > 0; });
+  if (!lineas.length) return { encabezados: [], filas: [] };
+
+  var corta = function (l) {
+    return l.split('\t').map(function (c) { return c.trim(); });
+  };
+  return { encabezados: corta(lineas[0]), filas: lineas.slice(1).map(corta) };
+}
+
+/** Muestra la tabla pegada, en modo sólo lectura. */
+function pintarTablaLibre(campo, vista) {
+  var datos = TABLAS_LIBRES[campo.clave];
+  vista.innerHTML = '';
+
+  if (!datos.filas.length) {
+    vista.appendChild(crear('div', {
+      clase: 'pista', style: 'padding:12px',
+      texto: 'Sin tabla. Copia el rango en Excel y pégalo en el recuadro de arriba.'
+    }));
+    return;
+  }
+
+  var tabla = crear('table', { clase: 'dinamica' });
+  var thead = crear('thead');
+  var trh = crear('tr');
+  datos.encabezados.forEach(function (h) { trh.appendChild(crear('th', { texto: h })); });
+  thead.appendChild(trh);
+  tabla.appendChild(thead);
+
+  var tbody = crear('tbody');
+  datos.filas.forEach(function (fila) {
+    var tr = crear('tr');
+    for (var i = 0; i < datos.encabezados.length; i++) {
+      tr.appendChild(crear('td', { clase: 'solo-lectura', texto: fila[i] || '' }));
+    }
+    tbody.appendChild(tr);
+  });
+  tabla.appendChild(tbody);
+  vista.appendChild(tabla);
+}
+
 /** Lee el formulario y arma el objeto que espera apiGuardar. */
 function recolectar() {
   var campos = {};
 
   CAMPOS.forEach(function (campo) {
-    if (campo.tipo === 'tabla') {
+    if (campo.tipo === 'imagen') {
+      var adjuntos = (ADJUNTOS[campo.clave] || []).map(function (a) {
+        // `vistaPrevia` es sólo para la interfaz: no se envía al servidor.
+        return { nombre: a.nombre, mime: a.mime, base64: a.base64,
+                 enlace: a.enlace, comentario: a.comentario };
+      });
+      if (campo.comentario) {
+        var ta = document.querySelector('[data-comentario="' + campo.clave + '"]');
+        var comentario = ta ? ta.value.trim() : '';
+        if (adjuntos.length) adjuntos[0].comentario = comentario;
+        else if (comentario) adjuntos.push({ nombre: '(sin imagen)', comentario: comentario });
+      }
+      campos[campo.clave] = adjuntos;
+
+    } else if (campo.tipo === 'tablaLibre') {
+      campos[campo.clave] = TABLAS_LIBRES[campo.clave] || { encabezados: [], filas: [] };
+
+    } else if (campo.tipo === 'tabla') {
       var tbody = document.querySelector('tbody[data-tabla="' + campo.clave + '"]');
       var filas = [];
       if (tbody) {
@@ -266,9 +583,9 @@ function recolectar() {
           if (tr.className === 'vacia') return;
           var fila = {};
           var algo = false;
-          Array.prototype.forEach.call(tr.querySelectorAll('input[data-col]'), function (input) {
-            var v = input.value.trim();
-            fila[input.getAttribute('data-col')] = v;
+          Array.prototype.forEach.call(tr.querySelectorAll('[data-col]'), function (control) {
+            var v = String(control.value || '').trim();
+            fila[control.getAttribute('data-col')] = v;
             if (v) algo = true;
           });
           if (algo) filas.push(fila);
