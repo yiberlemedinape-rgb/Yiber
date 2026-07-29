@@ -66,13 +66,13 @@ o quitar un campo se hace en un solo lugar.**
 En Apps Script, **una función cuyo nombre termina en `_` es privada**: no
 aparece en el selector de **▶ Ejecutar** del editor y no puede invocarse con
 `google.script.run`. Todo el proyecto usa esa convención, así que el editor sólo
-ofrece los **15 puntos de entrada** reales:
+ofrece los **16 puntos de entrada** reales:
 
 | Función | Quién la ejecuta |
 |---|---|
 | `onOpen()` | Google Sheets, al abrir el libro |
 | `doGet()`, `include()` | La aplicación web |
-| `menuInicializar()`, `menuUrlWebApp()`, `menuPrevisualizar()`, `menuEnviarAhora()`, `menuInstalarDisparador()`, `menuEstado()` | El menú de la hoja |
+| `menuInicializar()`, `menuUrlWebApp()`, `menuVerificarApi()`, `menuPrevisualizar()`, `menuEnviarAhora()`, `menuInstalarDisparador()`, `menuEstado()` | El menú de la hoja |
 | `apiSesion()`, `apiCargarRegistro()`, `apiGuardar()` | El navegador vía `google.script.run` |
 | `apiPrevisualizarCorreo()`, `apiEnviarInformeGerencial()` | Ídem, pero **exigen Administrador en el servidor** |
 | `enviarInformeSemanal()` | El disparador semanal |
@@ -258,7 +258,24 @@ pueden alterar filas ajenas), y aun así Google entrega el correo del usuario qu
 entra —porque está en el mismo dominio—, que es lo que permite validarlo contra
 la hoja `Usuario`.
 
-### 4.5 Activar el envío automático
+### 4.5 Comprobar que todo está listo
+
+Menú **📊 Informes Semanales → 🔒 Verificar conexión con Gemini**. Revisa cinco
+cosas y dice cuáles fallan:
+
+| Verifica | Cómo |
+|---|---|
+| **Gemini** | Hace una llamada real y mínima al modelo. No basta con mirar si hay clave: una clave revocada, un modelo mal escrito o una cuota agotada se ven igual que una configuración correcta hasta que se intenta usar. |
+| **Drive** | **Crea y borra un archivo de prueba.** La cuenta puede *ver* la carpeta y aun así no poder escribir en ella, y ese fallo sólo aparecería cuando alguien intente adjuntar una imagen. |
+| **Destinatario** | Que `CORREO_GERENTE` esté configurado. |
+| **Envío automático** | Que el disparador esté instalado. |
+| **Semana en curso** | Cuántos reportes llegaron, cuántas imágenes leerá Gemini y quién falta. |
+
+Los errores traen la causa probable y la propiedad a corregir: un `404` señala
+`MODELO_IA`, un `429` avisa que se agotó la cuota, una carpeta inaccesible
+apunta a `CARPETA_DRIVE`.
+
+### 4.6 Activar el envío automático
 
 Menú **📊 Informes Semanales → 🔒 Instalar envío automático (viernes 6:00 a. m.)**.
 
@@ -401,15 +418,33 @@ en la vista previa de la interfaz.
 
 ### 6.3 Cómo lee Gemini las imágenes
 
-> ⚠️ **Gemini no puede leer una carpeta de Drive.** `generateContent` no tiene
+> ⚠️ **Gemini no puede navegar una carpeta de Drive.** `generateContent` no tiene
 > conector a Drive: sólo acepta bytes dentro de la petición (`inline_data`) o
 > URIs de su propia Files API.
 
-Lo que hace el sistema consigue el mismo objetivo por otra vía: al redactar el
-informe, **Apps Script lee los archivos desde Drive con `DriveApp` y los adjunta
-a la petición**. Cada imagen va precedida de una parte de texto que dice de qué
-área y de qué indicador es —sin ese rótulo el modelo recibe capturas sin
-contexto— y, si el campo tiene comentario, también lo incluye.
+El sistema consigue el mismo resultado por otra vía: al redactar el informe,
+**Apps Script recorre la carpeta de la semana, lee los archivos con `DriveApp` y
+los adjunta a la petición**. Cada imagen va precedida de una parte de texto que
+dice de qué área y de qué indicador es —sin ese rótulo el modelo recibe capturas
+sin contexto— y, si el campo tiene comentario, también lo incluye.
+
+**El informe no menciona adjuntos.** Las cifras de las imágenes quedan escritas
+dentro del texto, en la sección que les corresponde. Las directrices prohíben
+explícitamente escribir "ver imagen adjunta", nombrar archivos o enlazar
+carpetas: la gerencia lee el informe, no abre archivos. Al JSON que viaja al
+modelo tampoco se le pasan nombres de archivo, sólo el comentario del área —
+nombrarlos invitaba al modelo a remitir al adjunto.
+
+**Gráficas.** Cuando una imagen es una gráfica, el modelo la reconstruye en dos
+partes: una **tabla Markdown** con los datos que puede leer (serie, periodo,
+valor) y dos o tres **viñetas con la lectura gerencial** — tendencia, punto de
+quiebre, valor atípico y su implicación. La tabla es el dato; las viñetas son el
+análisis, que es lo que se espera del informe.
+
+> El modelo devuelve texto, así que "replicar la gráfica" significa
+> **reconstruir sus datos y explicarla**, no volver a dibujarla. En un correo eso
+> suele ser más útil: la tabla se puede copiar, comparar y auditar, y sobrevive a
+> los clientes de correo que bloquean imágenes.
 
 | Tope | Valor | Por qué |
 |---|---|---|
@@ -528,7 +563,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~195 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~215 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -590,6 +625,7 @@ Y desde el menú de Google Sheets, para la configuración
 | Que el informe salga solo cada semana | 🔒 **Instalar envío automático (viernes 6:00 a. m.)**. Una sola vez. |
 | Revisar la configuración | 🔒 **Estado de la configuración** (gerente, admins, IA, disparador). |
 | Comprobar que una columna no se rompió | 🔒 **Verificar / crear hojas**. |
+| Saber si todo está listo para el viernes | 🔒 **Verificar conexión con Gemini**. |
 | Previsualizar o enviar sin abrir la web | 🔒 **Previsualizar informe** / 🔒 **Enviar informe ahora**. |
 
 ---

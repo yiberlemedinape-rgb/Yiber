@@ -254,7 +254,7 @@ console.log('\n[0b] Superficie pública del proyecto');
 const ENTRADAS_PERMITIDAS = [
   'onOpen',                                   // disparador simple de Sheets
   'doGet', 'include',                         // aplicación web
-  'menuInicializar', 'menuUrlWebApp', 'menuPrevisualizar',
+  'menuInicializar', 'menuUrlWebApp', 'menuPrevisualizar', 'menuVerificarApi',
   'menuEnviarAhora', 'menuInstalarDisparador', 'menuEstado',
   'apiSesion', 'apiCargarRegistro', 'apiGuardar',
   'apiPrevisualizarCorreo', 'apiEnviarInformeGerencial',  // sólo Administrador
@@ -931,6 +931,96 @@ try { S.instalarDisparadores_(); } catch (e) { errDia = e.message; }
 ok(errDia.indexOf('no es un día válido') >= 0,
    'un día mal escrito se rechaza con un mensaje claro', errDia);
 S.CONFIG.ENVIO_DIA = diaOriginal;
+
+/* ===== 17. El informe ya no habla de adjuntos ===== */
+console.log('\n[17] El informe no expone adjuntos ni carpetas');
+ok(md.indexOf('Adjuntos de la semana') < 0,
+   'se eliminó la sección "Adjuntos de la semana" del anexo');
+ok(md.indexOf('carpeta en Drive') < 0, 'ni el enlace a la carpeta de Drive');
+
+/* Las directrices que recibe Gemini deben prohibir el lenguaje de adjuntos y
+   pedir la reconstrucción de las gráficas. */
+ok(S.DIRECTRICES_INFORME.indexOf('Nunca escribas "ver imagen adjunta"') >= 0,
+   'las directrices prohíben remitir a un adjunto');
+ok(S.DIRECTRICES_INFORME.indexOf('reconstrúyela en dos partes') >= 0,
+   'y piden reconstruir las gráficas');
+ok(S.DIRECTRICES_INFORME.indexOf('tabla Markdown') >= 0,
+   'con una tabla de datos legibles');
+ok(S.DIRECTRICES_INFORME.indexOf('viñetas con lo que la gráfica revela') >= 0,
+   'y la lectura gerencial de la gráfica');
+
+/* El JSON que viaja a Gemini no debe llevar nombres de archivo: nombrarlos
+   invita al modelo a escribir "ver adjunto". */
+PROPS.GEMINI_API_KEY = 'clave-de-prueba';
+let cuerpoIa = null;
+FETCH = (url, opciones) => {
+  cuerpoIa = JSON.parse(opciones.payload);
+  return respuestaHttp(200, {
+    candidates: [{ content: { parts: [{ text: '## 📋 RESUMEN EJECUTIVO\n\nOK.' }] },
+                   finishReason: 'STOP' }]
+  });
+};
+S.construirInforme_(P.anio, P.semana, true);
+const textoUsuario = cuerpoIa.contents[0].parts[0].text;
+ok(textoUsuario.indexOf('.png') < 0,
+   'el JSON de datos no menciona nombres de archivo');
+ok(textoUsuario.indexOf('Imagen adjunta (') < 0, 'ni la etiqueta "Imagen adjunta"');
+ok(textoUsuario.indexOf('87,5%') >= 0,
+   'pero el comentario del área sí viaja, que es texto suyo');
+ok(cuerpoIa.systemInstruction.parts[0].text.indexOf('gráfica') >= 0,
+   'y las directrices sobre gráficas llegan como systemInstruction');
+
+/* ===== 18. Verificación de la API ===== */
+console.log('\n[18] Botón de verificación de la API');
+
+FETCH = () => respuestaHttp(200, {
+  candidates: [{ content: { parts: [{ text: 'LISTO' }] }, finishReason: 'STOP' }]
+});
+const okIa = S.verificarApiIa_();
+ok(okIa.ok === true, 'con clave y API sana, reporta conexión correcta');
+ok(okIa.detalle.indexOf('gemini-2.5-flash') >= 0, 'e indica el modelo probado', okIa.detalle);
+ok(typeof okIa.ms === 'number', 'y mide el tiempo de respuesta');
+
+/* Un modelo inexistente debe explicarse, no devolver un 404 crudo. */
+FETCH = () => respuestaHttp(404, { error: { code: 404, message: 'models/x is not found' } });
+const err404 = S.verificarApiIa_();
+ok(err404.ok === false && err404.detalle.indexOf(S.CONFIG.PROP_MODELO) >= 0,
+   'un 404 señala la propiedad MODELO_IA', err404.detalle);
+
+FETCH = () => respuestaHttp(429, { error: { code: 429, message: 'Quota exceeded' } });
+const err429 = S.verificarApiIa_();
+ok(err429.ok === false && err429.detalle.indexOf('cuota') >= 0,
+   'un 429 explica que se agotó la cuota', err429.detalle);
+
+FETCH = () => { throw new Error('DNS timeout'); };
+const errRed = S.verificarApiIa_();
+ok(errRed.ok === false && errRed.titulo.indexOf('No hay conexión') >= 0,
+   'una caída de red se reporta como tal');
+
+delete PROPS.GEMINI_API_KEY;
+const sinClave = S.verificarApiIa_();
+ok(sinClave.ok === false && sinClave.detalle.indexOf('informe se enviará igual') >= 0,
+   'sin clave avisa, pero aclara que el informe igual sale', sinClave.detalle);
+
+/* La carpeta de Drive se verifica escribiendo de verdad, no sólo mirando. */
+const archivosAntes = Object.keys(DRIVE.archivos).length;
+const okDrive = S.verificarCarpetaDrive_();
+ok(okDrive.ok === true, 'la carpeta configurada es accesible y escribible');
+const rastro = Object.values(DRIVE.archivos)
+  .filter(a => a.getName() === '.verificacion-informes.txt' && !a.papelera);
+ok(rastro.length === 0, 'el archivo de prueba no queda en la carpeta');
+ok(Object.keys(DRIVE.archivos).length === archivosAntes + 1,
+   'sólo se creó el archivo de prueba, que quedó en la papelera');
+
+PROPS.CARPETA_DRIVE = 'carpeta-que-no-existe';
+const malDrive = S.verificarCarpetaDrive_();
+ok(malDrive.ok === false && malDrive.detalle.indexOf('CARPETA_DRIVE') >= 0,
+   'una carpeta inaccesible señala la propiedad a corregir', malDrive.titulo);
+delete PROPS.CARPETA_DRIVE;
+
+ok(S.contarAdjuntosSemana_(P.anio, P.semana) === 4,
+   'se cuentan las imágenes que Gemini leerá esta semana',
+   S.contarAdjuntosSemana_(P.anio, P.semana));
 
 if (process.env.VER) { console.log('\n===== INFORME =====\n' + md); }
 console.log('\n' + (fallos ? '❌ ' + fallos + ' prueba(s) fallida(s)' : '✅ Todas las pruebas pasaron'));

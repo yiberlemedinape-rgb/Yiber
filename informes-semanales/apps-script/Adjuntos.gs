@@ -192,6 +192,68 @@ function leerAdjunto_(enlaceOId) {
   }
 }
 
+/**
+ * Comprueba que la carpeta de Drive esté accesible y se pueda escribir en ella.
+ *
+ * Escribir es lo que importa: la cuenta puede *ver* la carpeta y aun así no
+ * poder crear archivos, y ese fallo sólo aparecería cuando un colaborador
+ * intente adjuntar una imagen. Aquí se prueba de verdad y se borra el rastro.
+ *
+ * @return {Object} { ok, titulo, detalle, url }
+ */
+function verificarCarpetaDrive_() {
+  var carpeta;
+  try {
+    carpeta = carpetaRaiz_();
+  } catch (e) {
+    return { ok: false, titulo: 'Carpeta de Drive inaccesible', detalle: e.message };
+  }
+
+  try {
+    var prueba = carpeta.createFile(
+      Utilities.newBlob('verificacion', 'text/plain', '.verificacion-informes.txt'));
+    prueba.setTrashed(true);
+  } catch (e2) {
+    return {
+      ok: false,
+      titulo: 'Sin permiso de escritura en Drive',
+      detalle: 'La carpeta "' + carpeta.getName() + '" se puede ver pero no ' +
+               'escribir. Dale permiso de Editor a la cuenta que ejecuta el ' +
+               'script. Detalle: ' + e2.message,
+      url: carpeta.getUrl()
+    };
+  }
+
+  return {
+    ok: true,
+    titulo: 'Carpeta lista',
+    detalle: '"' + carpeta.getName() + '" accesible y con permiso de escritura.',
+    url: carpeta.getUrl()
+  };
+}
+
+/** Cuenta las imágenes adjuntas de una semana, por área. */
+function contarAdjuntosSemana_(anio, semana) {
+  var total = 0;
+  for (var a = 0; a < ORDEN_AREAS.length; a++) {
+    var area = ORDEN_AREAS[a];
+    var def = ESQUEMA[area];
+    var registros = leerSemanaArea_(area, anio, semana);
+    for (var r = 0; r < registros.length; r++) {
+      for (var c = 0; c < def.campos.length; c++) {
+        if (def.campos[c].tipo !== 'imagen') continue;
+        var dato = registros[r].campos[def.campos[c].clave];
+        if (dato && dato.filas) {
+          for (var f = 0; f < dato.filas.length; f++) {
+            if (dato.filas[f].enlace) total++;
+          }
+        }
+      }
+    }
+  }
+  return total;
+}
+
 /** URL de la carpeta de una semana, para enlazarla desde el informe. */
 function urlCarpetaSemana_(anio, semana) {
   try {

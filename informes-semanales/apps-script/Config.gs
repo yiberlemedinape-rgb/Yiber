@@ -146,7 +146,22 @@ var DIRECTRICES_INFORME =
   '- Trabaja únicamente con los datos entregados. No inventes cifras, clientes ni equipos.\n' +
   '- Si un área no reportó, dilo explícitamente en una línea en vez de omitirla.\n' +
   '- Prioriza lo excepcional sobre lo rutinario: la gerencia lee esto para decidir.\n' +
-  '- No incluyas preámbulos ni cierres; empieza directamente en el primer título.';
+  '- No incluyas preámbulos ni cierres; empieza directamente en el primer título.\n\n' +
+  'TRATAMIENTO DE LAS IMÁGENES ADJUNTAS:\n' +
+  'Recibirás capturas de tableros e indicadores, cada una rotulada con su área y ' +
+  'su indicador. Son insumo tuyo, no del lector.\n' +
+  '- **Nunca escribas "ver imagen adjunta", "según el archivo" ni menciones ' +
+  'nombres de archivo o enlaces.** La gerencia lee el informe, no abre adjuntos: ' +
+  'toda cifra que esté en una imagen debe quedar escrita en el texto.\n' +
+  '- Extrae las cifras y redáctalas dentro de la sección que les corresponde, como ' +
+  'si las hubieras recibido en una tabla.\n' +
+  '- Si la imagen es una **gráfica**, reconstrúyela en dos partes: (1) una tabla ' +
+  'Markdown con los datos que puedas leer de ella —serie, periodo y valor— y ' +
+  '(2) dos o tres viñetas con lo que la gráfica revela: tendencia, punto de ' +
+  'quiebre, valor atípico y su implicación para la operación. La tabla es el dato; ' +
+  'las viñetas son la lectura gerencial, que es lo que se espera de ti.\n' +
+  '- Si una cifra de la imagen es ilegible o ambigua, dilo en una frase breve en ' +
+  'vez de estimarla.';
 
 /* ===================== Listas desplegables ===================== */
 

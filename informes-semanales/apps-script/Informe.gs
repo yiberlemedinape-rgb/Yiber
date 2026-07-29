@@ -85,9 +85,12 @@ function tablaLibreDe_(registro, clave) {
 }
 
 /**
- * Viñetas para los adjuntos de un campo, con enlace a Drive y el comentario del
- * área si lo tiene. El informe no incrusta la imagen: enlaza al archivo, que es
- * lo que sobrevive dentro de un correo.
+ * Viñetas para los adjuntos de un campo — SÓLO para el informe determinista.
+ *
+ * Cuando Gemini está disponible, las cifras de las imágenes quedan redactadas
+ * dentro del texto y la gerencia nunca ve un enlace a un archivo. Este respaldo
+ * no puede leer imágenes, así que enlaza al archivo: es preferible un enlace a
+ * perder el dato. Es una señal de modo degradado, no el comportamiento normal.
  */
 function vinetasAdjuntos_(consolidado, area, clave, etiqueta) {
   var L = [];
@@ -670,10 +673,6 @@ function bloqueCobertura_(consolidado) {
   var L = ['---', '', '**Cobertura del reporte:** ' + consolidado.totalReportes +
            ' reporte(s) recibido(s).'];
 
-  var carpeta = urlCarpetaSemana_(consolidado.anio, consolidado.semana);
-  if (carpeta) {
-    L.push('**Adjuntos de la semana:** [carpeta en Drive](' + carpeta + ').');
-  }
   if (consolidado.faltantes.length) {
     var nombres = consolidado.faltantes.map(function (f) {
       return f.nombre + ' (' + f.area + ')';

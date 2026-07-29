@@ -74,13 +74,14 @@ function datosParaIa_(consolidado) {
 
         if (campo.tipo === 'imagen') {
           if (!dato.filas || !dato.filas.length) continue;
-          // Los bytes van aparte, como partes de imagen. Aquí sólo queda el
-          // aviso de que existen, y el comentario, que sí es texto del área.
-          item[campo.titulo] = dato.filas.map(function (f) {
-            return f.comentario
-              ? 'Imagen adjunta (' + f.nombre + '). Comentario del área: ' + f.comentario
-              : 'Imagen adjunta (' + f.nombre + ').';
-          });
+          // Las cifras llegan como partes de imagen; aquí sólo va el comentario
+          // del área, que sí es texto suyo. No se pasan nombres de archivo:
+          // nombrarlos invita al modelo a escribir "ver adjunto" en el informe.
+          var comentarios = dato.filas
+            .map(function (f) { return texto_(f.comentario); })
+            .filter(function (c) { return c.length > 0; });
+          if (!comentarios.length) continue;
+          item[campo.titulo + ' — comentario del área'] = comentarios;
           tieneAlgo = true;
         } else if (campo.tipo === 'tablaLibre') {
           if (!dato.tabla || !dato.tabla.filas.length) continue;
@@ -106,6 +107,86 @@ function datosParaIa_(consolidado) {
 
   salida.metricas = kpisDeSemana_(consolidado.anio, consolidado.semana);
   return salida;
+}
+
+/**
+ * Comprobación de que la API está lista para trabajar.
+ *
+ * Hace una llamada real y mínima al modelo configurado. No basta con verificar
+ * que exista la clave: una clave revocada, un modelo mal escrito o una cuota
+ * agotada sólo se descubren llamando, y descubrirlo un viernes a las 6:00 a. m.
+ * es tarde.
+ *
+ * @return {Object} { ok, titulo, detalle, ms }
+ */
+function verificarApiIa_() {
+  var clave = apiKey_();
+  if (!clave) {
+    return {
+      ok: false,
+      titulo: 'Sin clave configurada',
+      detalle: 'Falta la propiedad de script ' + CONFIG.PROP_API_KEY + '. El ' +
+               'informe se enviará igual, pero redactado de forma automática, ' +
+               'sin análisis de la IA ni lectura de las imágenes.'
+    };
+  }
+
+  var inicio = new Date().getTime();
+  var respuesta;
+  try {
+    respuesta = UrlFetchApp.fetch(urlGemini_(), {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': clave },
+      payload: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: 'Responde únicamente: LISTO' }] }],
+        generationConfig: { maxOutputTokens: 512, thinkingConfig: { thinkingBudget: 0 } }
+      }),
+      muteHttpExceptions: true
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      titulo: 'No hay conexión con la API',
+      detalle: e.message + '. Revisa que el permiso de servicios externos esté ' +
+               'autorizado en el proyecto.'
+    };
+  }
+
+  var ms = new Date().getTime() - inicio;
+  var codigo = respuesta.getResponseCode();
+  var json;
+  try { json = JSON.parse(respuesta.getContentText()); } catch (e2) { json = null; }
+
+  if (codigo !== 200) {
+    var detalle = (json && json.error && json.error.message)
+      ? json.error.message : respuesta.getContentText().slice(0, 300);
+    var pista = '';
+    if (codigo === 400 || codigo === 403) {
+      pista = ' Suele deberse a una clave inválida o sin permisos sobre el modelo.';
+    } else if (codigo === 404) {
+      pista = ' El modelo "' + modeloIa_() + '" no existe o no está disponible ' +
+              'para esta clave. Revisa la propiedad ' + CONFIG.PROP_MODELO + '.';
+    } else if (codigo === 429) {
+      pista = ' Se agotó la cuota. El informe saldría en modo automático.';
+    }
+    return { ok: false, titulo: 'La API respondió ' + codigo, detalle: detalle + pista, ms: ms };
+  }
+
+  var texto = '';
+  var partes = (json && json.candidates && json.candidates[0] &&
+                json.candidates[0].content && json.candidates[0].content.parts) || [];
+  for (var i = 0; i < partes.length; i++) {
+    if (partes[i].text) texto += partes[i].text;
+  }
+
+  return {
+    ok: true,
+    titulo: 'Conexión correcta',
+    detalle: 'Modelo ' + modeloIa_() + ' · respondió en ' + ms + ' ms' +
+             (texto ? ' · "' + texto.trim().slice(0, 40) + '"' : ''),
+    ms: ms
+  };
 }
 
 /**

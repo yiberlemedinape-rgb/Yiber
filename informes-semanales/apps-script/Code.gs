@@ -39,6 +39,7 @@ function onOpen() {
     .createMenu('📊 Informes Semanales')
     .addItem('Abrir interfaz web (URL)', 'menuUrlWebApp')
     .addSeparator()
+    .addItem('🔒 Verificar conexión con Gemini', 'menuVerificarApi')
     .addItem('🔒 Verificar / crear hojas', 'menuInicializar')
     .addItem('🔒 Previsualizar informe de esta semana', 'menuPrevisualizar')
     .addItem('🔒 Enviar informe ahora (manual)', 'menuEnviarAhora')
@@ -61,6 +62,74 @@ function accionAdministrador_(titulo, fn) {
   } catch (e) {
     ui.alert(titulo, e.message, ui.ButtonSet.OK);
   }
+}
+
+/**
+ * Comprueba que todo lo necesario para el informe del viernes esté en pie:
+ * la API de Gemini, la carpeta de Drive, el destinatario y el disparador.
+ *
+ * Se llama de verdad a la API en vez de sólo mirar si hay clave, porque una
+ * clave revocada, un modelo mal escrito o una cuota agotada se ven igual que
+ * una configuración correcta hasta que se intenta usar.
+ */
+function menuVerificarApi() {
+  accionAdministrador_('Verificación de la API', function (ui) {
+    var lineas = [];
+    var problemas = 0;
+
+    var marca = function (r) { return r.ok ? '✅ ' : '❌ '; };
+
+    // 1. Gemini.
+    var ia = verificarApiIa_();
+    if (!ia.ok) problemas++;
+    lineas.push(marca(ia) + 'GEMINI — ' + ia.titulo);
+    lineas.push('   ' + ia.detalle);
+    lineas.push('');
+
+    // 2. Carpeta de adjuntos.
+    var drive = verificarCarpetaDrive_();
+    if (!drive.ok) problemas++;
+    lineas.push(marca(drive) + 'DRIVE — ' + drive.titulo);
+    lineas.push('   ' + drive.detalle);
+    lineas.push('');
+
+    // 3. Destinatario del informe.
+    var gerente = correoGerente_();
+    if (!gerente) problemas++;
+    lineas.push((gerente ? '✅ ' : '❌ ') + 'DESTINATARIO — ' +
+                (gerente || 'falta la propiedad ' + CONFIG.PROP_CORREO_GERENTE));
+    lineas.push('');
+
+    // 4. Envío automático.
+    var triggers = ScriptApp.getProjectTriggers().filter(function (t) {
+      return t.getHandlerFunction() === HANDLER_INFORME;
+    });
+    if (!triggers.length) problemas++;
+    lineas.push((triggers.length ? '✅ ' : '❌ ') + 'ENVÍO AUTOMÁTICO — ' +
+                (triggers.length
+                  ? 'instalado (' + CONFIG.ENVIO_ETIQUETA + ')'
+                  : 'no instalado; el informe no saldrá solo'));
+    lineas.push('');
+
+    // 5. Insumos de la semana en curso.
+    var p = periodoActual_();
+    var consolidado = consolidarSemana_(p.anio, p.semana);
+    var imagenes = contarAdjuntosSemana_(p.anio, p.semana);
+    lineas.push('📋 SEMANA EN CURSO — ' + etiquetaSemana_(p.anio, p.semana));
+    lineas.push('   ' + consolidado.totalReportes + ' reporte(s) · ' +
+                imagenes + ' imagen(es) que Gemini leerá.');
+    if (consolidado.faltantes.length) {
+      lineas.push('   Faltan por reportar: ' +
+                  consolidado.faltantes.map(function (f) { return f.nombre; }).join(', '));
+    }
+    lineas.push('');
+    lineas.push(problemas === 0
+      ? '✅ Todo listo: el informe saldrá el ' + CONFIG.ENVIO_ETIQUETA + '.'
+      : '⚠️ ' + problemas + ' punto(s) por corregir. El informe se enviará igual, ' +
+        'pero revisa lo marcado con ❌.');
+
+    ui.alert('Verificación de la API', lineas.join('\n'), ui.ButtonSet.OK);
+  });
 }
 
 function menuInicializar() {
