@@ -3,8 +3,9 @@
  * ---------------------------------------------------------------------------
  * Envío automático del informe gerencial y gestión de los disparadores.
  *
- * Regla de negocio: el informe sale **los jueves a las 5:00 p. m.**
- * (zona horaria America/Bogota, definida en appsscript.json).
+ * Regla de negocio: el informe sale **los viernes a las 6:00 a. m.**
+ * (zona horaria America/Bogota, definida en appsscript.json). El día y la hora
+ * se configuran en CONFIG.ENVIO_DIA / ENVIO_HORA, no aquí.
  *
  * Nota sobre disparadores por tiempo: Apps Script ejecuta el disparador dentro
  * de una ventana de ~15 minutos alrededor de la hora indicada. Para el informe
@@ -254,8 +255,11 @@ function enviarInforme_(anio, semana) {
 }
 
 /**
- * Punto de entrada del disparador semanal (jueves 5:00 p. m.).
- * Envía siempre la semana ISO en curso.
+ * Punto de entrada del disparador semanal (viernes 6:00 a. m.).
+ *
+ * Envía siempre la semana ISO en curso. El viernes pertenece a la misma semana
+ * ISO que se está reportando (lunes a domingo), así que el informe cubre la
+ * semana que acaba de cerrar, igual que cuando salía el jueves.
  */
 function enviarInformeSemanal() {
   var periodo = periodoActual_();
@@ -291,17 +295,25 @@ function eliminarDisparadores_() {
 }
 
 /**
- * Instala (idempotente) el disparador de los jueves a las 5:00 p. m.
+ * Instala (idempotente) el disparador semanal según CONFIG.ENVIO_DIA / HORA.
  * La hora se interpreta en la zona horaria del proyecto (America/Bogota).
  */
 function instalarDisparadores_() {
+  var dia = ScriptApp.WeekDay[CONFIG.ENVIO_DIA];
+  if (!dia) {
+    throw new Error('CONFIG.ENVIO_DIA no es un día válido: "' + CONFIG.ENVIO_DIA +
+                    '". Usa MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, ' +
+                    'SATURDAY o SUNDAY.');
+  }
+
   eliminarDisparadores_();
   ScriptApp.newTrigger(HANDLER_INFORME)
     .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.THURSDAY)
-    .atHour(17)
+    .onWeekDay(dia)
+    .atHour(CONFIG.ENVIO_HORA)
     .nearMinute(0)
     .inTimezone(CONFIG.ZONA_HORARIA)
     .create();
-  return 'Disparador instalado: jueves 5:00 p. m. (' + CONFIG.ZONA_HORARIA + ').';
+  return 'Disparador instalado: ' + CONFIG.ENVIO_ETIQUETA +
+         ' (' + CONFIG.ZONA_HORARIA + ').';
 }

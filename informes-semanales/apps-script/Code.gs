@@ -18,7 +18,7 @@
  *   menu*()                   Acciones del menú; todas exigen Administrador.
  *   api*()                    Invocadas desde el HTML vía google.script.run.
  *                             Las de informe exigen Administrador en servidor.
- *   enviarInformeSemanal()    Disparador de los jueves a las 5:00 p. m.
+ *   enviarInformeSemanal()    Disparador semanal del informe gerencial.
  *                             Es la única función segura de ejecutar desde el
  *                             editor para probar el envío de punta a punta.
  *
@@ -43,7 +43,8 @@ function onOpen() {
     .addItem('🔒 Previsualizar informe de esta semana', 'menuPrevisualizar')
     .addItem('🔒 Enviar informe ahora (manual)', 'menuEnviarAhora')
     .addSeparator()
-    .addItem('🔒 Instalar envío automático (jueves 5:00 p. m.)', 'menuInstalarDisparador')
+    .addItem('🔒 Instalar envío automático (' + CONFIG.ENVIO_ETIQUETA + ')',
+             'menuInstalarDisparador')
     .addItem('🔒 Estado de la configuración', 'menuEstado')
     .addToUi();
 }
@@ -134,11 +135,12 @@ function menuEstado() {
       return t.getHandlerFunction() === HANDLER_INFORME;
     });
     if (triggers.length) {
-      lineas.push('Envío automático: instalado (jueves 5:00 p. m., ' + CONFIG.ZONA_HORARIA + ')');
+      lineas.push('Envío automático: instalado (' + CONFIG.ENVIO_ETIQUETA +
+                  ', ' + CONFIG.ZONA_HORARIA + ')');
       var p = periodoActual_();
       lineas.push('Próximo informe: ' + etiquetaSemana_(p.anio, p.semana));
     } else {
-      lineas.push('Envío automático: ⚠️ NO instalado — el informe no saldrá el jueves.');
+      lineas.push('Envío automático: ⚠️ NO instalado — el informe no saldrá solo.');
     }
 
     ui.alert('Estado de la configuración', lineas.join('\n'), ui.ButtonSet.OK);
@@ -333,7 +335,7 @@ function apiGuardar(datos) {
  * ocurre. Las pruebas verifican exactamente ese escenario.
  *
  * El informe sale por tres caminos, todos autorizados:
- *   1. Automático: disparador `enviarInformeSemanal` (jueves 5:00 p. m.).
+ *   1. Automático: disparador `enviarInformeSemanal` (ver CONFIG.ENVIO_*).
  *   2. Interfaz web: panel del administrador.
  *   3. Menú de Google Sheets, también con `exigirAdministrador_()`.
  */

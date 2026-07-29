@@ -9,7 +9,7 @@
  * Se activa sólo si existe la propiedad de script GEMINI_API_KEY.
  * Si no existe, falla la red, la API devuelve error, el prompt es bloqueado o
  * la respuesta llega vacía, `construirInforme_` cae automáticamente al redactor
- * determinista de Informe.gs: el correo del jueves nunca se queda sin enviar
+ * determinista de Informe.gs: el correo semanal nunca se queda sin enviar
  * por una dependencia externa.
  *
  * Configuración (Extensiones → Apps Script → Configuración del proyecto →

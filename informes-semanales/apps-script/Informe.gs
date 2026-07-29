@@ -9,8 +9,8 @@
  *   2) `informeConIa_` (Ia.gs) — si hay GEMINI_API_KEY configurada, Gemini
  *      redacta el análisis siguiendo las DIRECTRICES_INFORME.
  *
- * El determinista es el respaldo: si la IA falla, el jueves a las 5:00 p.m.
- * igual sale un informe con la información completa.
+ * El determinista es el respaldo: si la IA falla, a la hora del envío igual
+ * sale un informe con la información completa.
  * ---------------------------------------------------------------------------
  */
 

@@ -4,7 +4,7 @@ Ecosistema de **Google Sheets + Apps Script + interfaz web** para recopilar los
 informes periódicos de las siete áreas (Directores, Gestión Comercial, Asesores
 KAM, DPA, Soporte Técnico, SAU/Renta/CDR y Desarrollo de Personal), almacenarlos
 en una base de datos única y **generar y enviar automáticamente el informe
-gerencial los jueves a las 5:00 p. m.**
+gerencial los viernes a las 6:00 a. m.**
 
 ---
 
@@ -26,7 +26,7 @@ gerencial los jueves a las 5:00 p. m.**
                  ┌───────────────▼─────────────────────────┐
                  │ Google Sheets (1 hoja por área)         │
                  └───────────────┬─────────────────────────┘
-                                 │ jueves 17:00 (disparador automático)
+                                 │ viernes 06:00 (disparador automático)
                                  │ o a mano por el Administrador
                  ┌───────────────▼─────────────────────────┐
                  │ Informe.gs → Gemini (opcional) → Correo │
@@ -56,7 +56,7 @@ o quitar un campo se hace en un solo lugar.**
 | `Kpis.gs` | Extracción automática de métricas hacia `KPI_Datos`. |
 | `Informe.gs` | Consolidación semanal y redactor determinista (las 5 secciones). |
 | `Ia.gs` | Conector con la API de Gemini (`gemini-2.5-flash`) para la redacción asistida (opcional). |
-| `Correo.gs` | Markdown → HTML, envío del correo y disparador de los jueves. |
+| `Correo.gs` | Markdown → HTML, envío del correo y disparador semanal. |
 | `Code.gs` | Menú de Sheets, `doGet()` y la API que consume la interfaz. |
 | `Index.html`, `Estilos.html`, `Js.html` | Interfaz web dinámica. |
 | `pruebas/prueba-local.js` | Banco de pruebas bajo Node con dobles de los servicios de Google. |
@@ -75,7 +75,7 @@ ofrece los **15 puntos de entrada** reales:
 | `menuInicializar()`, `menuUrlWebApp()`, `menuPrevisualizar()`, `menuEnviarAhora()`, `menuInstalarDisparador()`, `menuEstado()` | El menú de la hoja |
 | `apiSesion()`, `apiCargarRegistro()`, `apiGuardar()` | El navegador vía `google.script.run` |
 | `apiPrevisualizarCorreo()`, `apiEnviarInformeGerencial()` | Ídem, pero **exigen Administrador en el servidor** |
-| `enviarInformeSemanal()` | El disparador de los jueves |
+| `enviarInformeSemanal()` | El disparador semanal |
 
 Todo lo demás termina en `_` porque **espera argumentos** (área, año, semana,
 nombre) que el editor no tiene cómo suministrar. Ejecutar una de esas funciones
@@ -228,7 +228,7 @@ pegado dentro de un `.gs`.
 
 | Propiedad | Obligatoria | Para qué sirve |
 |---|---|---|
-| `CORREO_GERENTE` | ✅ | Destinatario del informe de los jueves. |
+| `CORREO_GERENTE` | ✅ | Destinatario del informe semanal. |
 | `ADMIN_CORREOS` | ✅ | Correos del **Administrador** (separados por coma): los únicos que pueden ejecutar el envío manual y las acciones de configuración. Si se deja vacía, sólo puede operar el propietario del libro. |
 | `CORREO_COPIA` | — | Copias del informe (separadas por coma). |
 | `GEMINI_API_KEY` | — | Clave de la API de Gemini (se obtiene en [Google AI Studio](https://aistudio.google.com/apikey)). Activa la redacción asistida; sin ella se usa el informe automático. |
@@ -258,12 +258,18 @@ pueden alterar filas ajenas), y aun así Google entrega el correo del usuario qu
 entra —porque está en el mismo dominio—, que es lo que permite validarlo contra
 la hoja `Usuario`.
 
-### 4.5 Activar el envío automático de los jueves
+### 4.5 Activar el envío automático
 
-Menú **📊 Informes Semanales → 🔒 Instalar envío automático (jueves 5:00 p. m.)**.
+Menú **📊 Informes Semanales → 🔒 Instalar envío automático (viernes 6:00 a. m.)**.
 
 - **Este paso no es opcional.** Sin él, el informe no sale nunca solo. El menú
-  **🔒 Estado de la configuración** lo advierte en mayúsculas si falta.
+  **🔒 Estado de la configuración** lo advierte si falta.
+- **El día y la hora se configuran en `Config.gs`** (`ENVIO_DIA`, `ENVIO_HORA`,
+  `ENVIO_ETIQUETA`), no repartidos por el código. Tras cambiarlos hay que volver
+  a ejecutar esta opción para que el disparador se reemplace.
+- El día elegido debe caer al final de la semana ISO (jueves a domingo): el
+  disparador informa siempre **la semana en curso**, así que un envío en lunes
+  cubriría la semana que apenas empieza, no la que cerró.
 - Es idempotente: reinstalar no duplica el disparador.
 - La hora se interpreta en `America/Bogota` (declarada en `appsscript.json` y
   fijada explícitamente con `.inTimezone()` al crear el disparador).
@@ -273,7 +279,7 @@ Menú **📊 Informes Semanales → 🔒 Instalar envío automático (jueves 5:0
 - El disparador corre con la cuenta que lo instaló: el correo sale desde esa
   cuenta y consume su cuota diaria de Gmail. Instálalo con la cuenta que quieras
   que figure como remitente.
-- Si un jueves falla el envío, el propio disparador avisa por correo a
+- Si el envío falla, el propio disparador avisa por correo a
   `ADMIN_CORREOS` con el motivo del error.
 
 ---
@@ -389,7 +395,7 @@ reportó** (calculado contra la hoja `Usuario`).
    sobre el JSON consolidado.
 
 El determinista es el **respaldo real**: si no hay clave, falla la red, la API
-responde un error o el modelo declina la solicitud, el correo del jueves sale
+responde un error o el modelo declina la solicitud, el correo semanal sale
 igual con toda la información. Los avisos de por qué se usó el respaldo se ven
 en la vista previa de la interfaz.
 
@@ -459,6 +465,7 @@ Detalles que importan en la práctica:
 | `CONFIG.IA_PRESUPUESTO_RAZONAMIENTO` | `1024` | Presupuesto de razonamiento. `0` lo desactiva, `-1` lo deja dinámico. |
 | `CONFIG.ADJUNTO_MAX_MB` | `8` | Peso máximo por archivo adjunto. |
 | `CONFIG.IA_MAX_IMAGENES` / `IA_MAX_MB_IMAGENES` | `12` / `14` | Cuántas imágenes viajan a Gemini y cuánto pesan. |
+| `CONFIG.ENVIO_DIA` / `ENVIO_HORA` | `FRIDAY` / `6` | Cuándo sale el informe. Requiere reinstalar el disparador. |
 | `CONFIG.ADMIN_TAMBIEN_REPORTA` | `false` | Si es `true`, al administrador se le muestra además el formulario de su área. |
 | `PALABRAS_CRITICAS` / `PALABRAS_PERSONAL` | — | Vocabulario que dispara el marcado de riesgo. |
 
@@ -521,7 +528,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~185 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~195 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -580,7 +587,7 @@ Y desde el menú de Google Sheets, para la configuración
 
 | Quiero… | Cómo |
 |---|---|
-| Que el informe salga solo los jueves | 🔒 **Instalar envío automático (jueves 5:00 p. m.)**. Una sola vez. |
+| Que el informe salga solo cada semana | 🔒 **Instalar envío automático (viernes 6:00 a. m.)**. Una sola vez. |
 | Revisar la configuración | 🔒 **Estado de la configuración** (gerente, admins, IA, disparador). |
 | Comprobar que una columna no se rompió | 🔒 **Verificar / crear hojas**. |
 | Previsualizar o enviar sin abrir la web | 🔒 **Previsualizar informe** / 🔒 **Enviar informe ahora**. |
@@ -625,7 +632,7 @@ probar el envío completo, ejecuta `enviarInformeSemanal`.
 La implementación web no está como *Ejecutar como: Yo* + *Acceso: dominio*
 (§4.4), o se está entrando con una cuenta que no es `@kaeser.com`.
 
-### El correo no llegó el jueves
+### El correo no llegó el viernes
 
 Revisa en orden, desde **🔒 Estado de la configuración**:
 

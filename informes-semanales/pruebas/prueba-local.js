@@ -131,6 +131,7 @@ const dos = n => String(n).padStart(2, '0');
 /* Propiedades del script y respuesta de UrlFetchApp: mutables, para poder
    simular la API de Gemini desde las pruebas. */
 const PROPS = {};
+const DISPARADORES = { instalados: [] };
 let FETCH = () => { throw new Error('sin red'); };
 /** Construye la respuesta que devuelve UrlFetchApp.fetch(). */
 const respuestaHttp = (codigo, cuerpo) => ({
@@ -182,7 +183,29 @@ const sandbox = {
     getEffectiveUser: () => ({ getEmail: () => 'yiber.medina@kaeser.com' })
   },
   MailApp: { sendEmail: o => { sandbox.__correo = o; } },
-  ScriptApp: { getProjectTriggers: () => [] },
+  ScriptApp: {
+    WeekDay: { MONDAY: 'MONDAY', TUESDAY: 'TUESDAY', WEDNESDAY: 'WEDNESDAY',
+               THURSDAY: 'THURSDAY', FRIDAY: 'FRIDAY', SATURDAY: 'SATURDAY',
+               SUNDAY: 'SUNDAY' },
+    getProjectTriggers: () => DISPARADORES.instalados.map(d => ({
+      getHandlerFunction: () => d.handler
+    })),
+    deleteTrigger: () => { DISPARADORES.instalados.length = 0; },
+    /* Constructor encadenable que registra cómo quedó configurado el
+       disparador, para poder afirmar el día y la hora reales. */
+    newTrigger: handler => {
+      const cfg = { handler };
+      const constructor = {
+        timeBased: () => constructor,
+        onWeekDay: d => { cfg.dia = d; return constructor; },
+        atHour: h => { cfg.hora = h; return constructor; },
+        nearMinute: m => { cfg.minuto = m; return constructor; },
+        inTimezone: tz => { cfg.zona = tz; return constructor; },
+        create: () => { DISPARADORES.instalados.push(cfg); return cfg; }
+      };
+      return constructor;
+    }
+  },
   UrlFetchApp: { fetch: (url, opciones) => FETCH(url, opciones) }
 };
 sandbox.globalThis = sandbox;
@@ -875,6 +898,39 @@ ok(conTope.imagenesLeidas === 2, 'respeta el máximo de imágenes por petición'
 ok(conTope.aviso.indexOf('máximo de 2 imágenes') >= 0, 'y explica por qué omitió el resto');
 S.CONFIG.IA_MAX_IMAGENES = 12;
 delete PROPS.GEMINI_API_KEY;
+
+/* ===== 16. Horario del envío automático ===== */
+console.log('\n[16] Envío automático los viernes a las 6:00 a. m.');
+const mensajeDisparador = S.instalarDisparadores_();
+ok(DISPARADORES.instalados.length === 1, 'se instala un único disparador');
+const disp = DISPARADORES.instalados[0];
+ok(disp.handler === 'enviarInformeSemanal', 'apunta a enviarInformeSemanal');
+ok(disp.dia === 'FRIDAY', 'se dispara el viernes', disp.dia);
+ok(disp.hora === 6, 'a las 6 de la mañana', disp.hora);
+ok(disp.zona === 'America/Bogota', 'en la zona horaria de Colombia', disp.zona);
+ok(mensajeDisparador.indexOf('viernes 6:00 a. m.') >= 0,
+   'y el mensaje que ve el administrador lo confirma', mensajeDisparador);
+
+/* Reinstalar no debe acumular disparadores. */
+S.instalarDisparadores_();
+ok(DISPARADORES.instalados.length === 1, 'reinstalar no duplica el disparador');
+
+/* El día configurado debe pertenecer a la semana ISO que se reporta: si el
+   informe saliera un lunes, cubriría la semana siguiente, no la que cierra. */
+const diaSemanaIso = { MONDAY: 1, TUESDAY: 2, WEDNESDAY: 3, THURSDAY: 4,
+                       FRIDAY: 5, SATURDAY: 6, SUNDAY: 7 }[S.CONFIG.ENVIO_DIA];
+ok(diaSemanaIso >= 4,
+   'el día de envío cae al final de la semana, así el informe cubre la semana que cierra',
+   S.CONFIG.ENVIO_DIA);
+
+/* Un día mal escrito debe fallar con un mensaje claro, no en silencio. */
+const diaOriginal = S.CONFIG.ENVIO_DIA;
+S.CONFIG.ENVIO_DIA = 'VIERNES';
+let errDia = '';
+try { S.instalarDisparadores_(); } catch (e) { errDia = e.message; }
+ok(errDia.indexOf('no es un día válido') >= 0,
+   'un día mal escrito se rechaza con un mensaje claro', errDia);
+S.CONFIG.ENVIO_DIA = diaOriginal;
 
 if (process.env.VER) { console.log('\n===== INFORME =====\n' + md); }
 console.log('\n' + (fallos ? '❌ ' + fallos + ' prueba(s) fallida(s)' : '✅ Todas las pruebas pasaron'));

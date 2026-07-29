@@ -99,6 +99,21 @@ var CONFIG = {
    */
   ADMIN_TAMBIEN_REPORTA: false,
 
+  /* ---------- Cuándo sale el informe ----------
+   *
+   * El horario vive aquí y no repartido por el código: cambiarlo es editar
+   * estas tres líneas y volver a ejecutar "Instalar envío automático".
+   * `ENVIO_DIA` es una clave de ScriptApp.WeekDay (MONDAY … SUNDAY) y
+   * `ENVIO_HORA` está en formato 24 h, interpretada en CONFIG.ZONA_HORARIA.
+   *
+   * El día elegido debe caer de lunes a domingo de la MISMA semana ISO que se
+   * quiere reportar, porque el disparador informa siempre la semana en curso.
+   * Viernes cumple: pertenece a la semana que cierra.
+   */
+  ENVIO_DIA: 'FRIDAY',
+  ENVIO_HORA: 6,
+  ENVIO_ETIQUETA: 'viernes 6:00 a. m.',
+
   /** Asunto del correo semanal. */
   ASUNTO_INFORME: 'Informe Gerencial Semanal — Kaeser Compresores'
 };
