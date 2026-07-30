@@ -590,16 +590,10 @@ var ESQUEMA = {
         encabezado: 'Novedades de Personal y Desempeño (Desempeño general, estado de salud (alto impacto), gestión de vacaciones y análisis de carga laboral.)',
         ayuda: 'Desempeño general, estado de salud (alto impacto), vacaciones y carga laboral.' },
 
-      { col: 'E', clave: 'equiposDetenidos', tipo: 'tabla',
+      { col: 'E', clave: 'equiposDetenidos', tipo: 'texto', lineas: 5,
         titulo: 'Equipos Detenidos / Novedades',
         encabezado: 'Equipos Detenidos / Novedades',
-        columnas: [
-          { clave: 'cliente', titulo: 'Cliente' },
-          { clave: 'equipo', titulo: 'Equipo' },
-          { clave: 'falla', titulo: 'Falla' },
-          { clave: 'estado', titulo: 'Estado' },
-          { clave: 'observacion', titulo: 'Obs.' }
-        ] },
+        ayuda: 'Redacción libre: cliente, equipo, falla, estado y observación.' },
 
       { col: 'F', clave: 'gestionSoporte', tipo: 'tabla',
         titulo: 'Gestión de Soporte por Ingeniero',
@@ -616,15 +610,31 @@ var ESQUEMA = {
         encabezado: 'Métricas Línea de Emergencia',
         ayuda: 'Adjunta la captura del tablero de la línea de emergencia.' },
 
-      { col: 'H', clave: 'firstTimeFix', tipo: 'imagen', comentario: true,
+      // El análisis va en su propio campo y no como comentario de la imagen:
+      // así queda en una columna propia de la hoja —legible y auditable sin
+      // abrir el adjunto— y llega al informe aunque falte la captura.
+      { col: 'M', clave: 'metricasEmergenciaTexto', tipo: 'texto', lineas: 4,
+        titulo: 'Métricas Línea de Emergencia — análisis',
+        encabezado: 'Métricas Línea de Emergencia — análisis',
+        ayuda: 'Qué explica las cifras del tablero y qué se está haciendo.' },
+
+      { col: 'H', clave: 'firstTimeFix', tipo: 'imagen',
         titulo: 'First Time Fix Rate (FTF)',
         encabezado: 'First Time Fix Rate (FTF)',
-        ayuda: 'Adjunta el indicador y escribe el análisis del área de soporte ' +
-               'en el comentario: es lo que la gerencia lee junto a la cifra.' },
+        ayuda: 'Adjunta el indicador del FTF.' },
 
+      { col: 'N', clave: 'firstTimeFixTexto', tipo: 'texto', lineas: 4,
+        titulo: 'First Time Fix Rate (FTF) — análisis',
+        encabezado: 'First Time Fix Rate (FTF) — análisis',
+        ayuda: 'Análisis del área: qué explica el resultado y qué se está ' +
+               'haciendo. Es lo que la gerencia lee junto a la cifra.' },
+
+      // 5. Renombrado. `encabezadosAlternos` conserva el nombre anterior para
+      //    que las hojas que aún no se han renombrado sigan mapeando bien.
       { col: 'I', clave: 'fallasFrecuentes', tipo: 'texto', lineas: 4,
-        titulo: 'Análisis de Fallas Frecuentes',
-        encabezado: 'Análisis de Fallas Frecuentes' },
+        titulo: 'Informe de gestión Ingenieros de Soporte',
+        encabezado: 'Informe de gestión Ingenieros de Soporte',
+        encabezadosAlternos: ['Análisis de Fallas Frecuentes'] },
 
       { col: 'J', clave: 'centroMonitoreo', tipo: 'texto', lineas: 4,
         titulo: 'Actividades Centro de Monitoreo',

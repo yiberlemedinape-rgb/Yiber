@@ -67,6 +67,12 @@ class FakeSheet {
 class FakeSpreadsheet {
   constructor() { this.sheets = {}; this.propietario = null; }
   getSheetByName(n) { return this.sheets[n] || null; }
+  getSheets() { return Object.keys(this.sheets).map(n => this.sheets[n]); }
+  renombrarHoja(viejo, nuevo) {
+    this.sheets[nuevo] = this.sheets[viejo];
+    this.sheets[nuevo].name = nuevo;
+    delete this.sheets[viejo];
+  }
   insertSheet(n) { this.sheets[n] = new FakeSheet(n); return this.sheets[n]; }
   getOwner() {
     if (!this.propietario) throw new Error('propietario no disponible');
@@ -464,11 +470,13 @@ S.guardarRegistro_('Gestión Comercial', {
 S.guardarRegistro_('Soporte Técnico', {
   anio: P.anio, semana: P.semana, nombre: 'Edilfonso Vaca',
   campos: {
-    equiposDetenidos: [{ cliente: 'Ecopetrol', equipo: 'EMR-7781', falla: 'Sensor de vibración',
-                         estado: 'En diagnóstico', observacion: '' }],
-    firstTimeFix: [{ nombre: 'ftf.png', mime: 'image/png', base64: PNG_1x1,
-                     comentario: '87,5% de FTF; las 26 visitas adicionales se concentran en Cali.' }],
+    equiposDetenidos: 'Ecopetrol — equipo EMR-7781 detenido por falla del sensor ' +
+                      'de vibración; en diagnóstico.',
+    firstTimeFix: [{ nombre: 'ftf.png', mime: 'image/png', base64: PNG_1x1 }],
+    firstTimeFixTexto: '87,5% de FTF; las 26 visitas adicionales se concentran en Cali.',
     metricasEmergencia: [{ nombre: 'emergencia.png', mime: 'image/png', base64: PNG_1x1 }],
+    metricasEmergenciaTexto: '31 llamadas atendidas, 4 fuera de horario.',
+    fallasFrecuentes: 'Los ingenieros cerraron 18 casos; 3 escalados a fábrica.',
     analisisVibraciones: [{ estado: 'Alerta', cantidad: '3' }],
     centroMonitoreo: 'Se activaron 5 alarmas remotas.'
   }
@@ -865,11 +873,16 @@ S.guardarRegistro_('Gestión Comercial', {
 ok(Object.keys(DRIVE.archivos).length === antesDeReenviar,
    'reenviar sin bytes nuevos no crea archivos en Drive');
 
-/* El comentario del área viaja junto al indicador. */
+/* El análisis del indicador vive en su propio campo de texto, no como comentario
+   pegado a la imagen: así queda en una columna propia, legible sin abrir nada. */
 const regSoporte = S.leerRegistro_('Soporte Técnico', P.anio, P.semana, 'Edilfonso Vaca');
-ok(regSoporte.campos.firstTimeFix.filas[0].comentario.indexOf('87,5%') >= 0,
-   'el comentario del FTF se guarda junto a la imagen',
-   regSoporte.campos.firstTimeFix.filas[0].comentario);
+ok(regSoporte.campos.firstTimeFixTexto.valor.indexOf('87,5%') >= 0,
+   'el análisis del FTF se guarda en su campo de texto',
+   regSoporte.campos.firstTimeFixTexto.valor);
+ok(regSoporte.campos.firstTimeFix.filas[0].enlace.indexOf('drive.google.com') >= 0,
+   'y la imagen sigue guardándose aparte, con su enlace');
+ok(regSoporte.campos.firstTimeFix.filas[0].comentario === undefined,
+   'el campo de imagen ya no arrastra comentario');
 
 /* Tope de peso. */
 let errPeso = '';
@@ -923,8 +936,8 @@ ok(partesImagen.every(p => p.mime_type === undefined && p.inline_data.mime_type 
    'con su tipo MIME dentro de inline_data');
 ok(partesIa.some(p => p.text && p.text.indexOf('indicador "First Time Fix Rate (FTF)"') >= 0),
    'cada imagen va rotulada con su área e indicador');
-ok(partesIa.some(p => p.text && p.text.indexOf('Comentario del área: 87,5%') >= 0),
-   'y el comentario del área acompaña al indicador');
+ok(partesIa[0].text.indexOf('87,5%') >= 0,
+   'y el análisis escrito por el área viaja en el JSON, junto al resto de sus datos');
 ok(conImagenes.imagenesLeidas === 4, 'se informa cuántas imágenes leyó', conImagenes.imagenesLeidas);
 ok(conImagenes.aviso === '', 'sin imágenes omitidas no hay aviso');
 
@@ -1353,6 +1366,100 @@ ok(S.construirInforme_(P.anio, P.semana, false).markdown.match(/^## /gm).length 
    detMd.match(/^## /gm).length);
 
 delete PROPS.GEMINI_API_KEY;
+
+/* ===== 23. Mapeo de columnas contra la hoja real =====
+   El sistema localizaba cada campo por la letra fija del ESQUEMA, sin mirar los
+   encabezados. Bastaba con insertar, mover o renombrar una columna en Sheets
+   para que todo cayera desplazado. Estas pruebas fijan el comportamiento nuevo:
+   manda el encabezado, no la posición. */
+console.log('\n[23] Las columnas se resuelven por encabezado, no por posición');
+
+const hojaSop = LIBRO.getSheetByName('Soporte Técnico');
+const mapaSop = S.mapaColumnas_(hojaSop, 'Soporte Técnico');
+
+/* El bug que originó todo esto: `var` es de ámbito de función en ES5, así que
+   el resultado de un campo sobrevivía a la vuelta siguiente y TODOS acababan
+   apuntando a la columna del primero. */
+const columnas = Object.keys(mapaSop.indices).map(k => mapaSop.indices[k]);
+ok(new Set(columnas).size === columnas.length,
+   'cada campo resuelve a una columna distinta', JSON.stringify(mapaSop.indices));
+ok(mapaSop.porDefecto.length === 0,
+   'y todos se encontraron por su encabezado, sin recurrir a la letra de respaldo',
+   mapaSop.porDefecto.map(f => f.clave).join(','));
+
+/* Una columna insertada en medio desplaza todo lo que viene después. Es el caso
+   real: alguien añade una columna en Sheets y el sistema tiene que seguirla. */
+const hojaX = LIBRO.insertSheet('prueba-mapeo');
+hojaX.appendRow(['Año', 'N° de Semana', 'Nombre del Colaborador',
+                 'Novedades de Personal y Desempeño', 'COLUMNA NUEVA DEL USUARIO',
+                 'Equipos Detenidos / Novedades']);
+const mapaX = S.mapaColumnas_(hojaX, 'Soporte Técnico');
+ok(mapaX.indices.novedadesPersonal === 4, 'lo anterior a la columna nueva no se mueve');
+ok(mapaX.indices.equiposDetenidos === 6,
+   'y lo posterior se sigue hasta su nueva posición, no a la letra del ESQUEMA',
+   mapaX.indices.equiposDetenidos);
+ok(mapaX.porDefecto.length > 0, 'los campos que aún no existen se declaran como tales');
+
+/* El encabezado del ESQUEMA lleva una aclaración entre paréntesis que la gente
+   no suele copiar a la hoja; debe reconocerse igual. */
+ok(S.mapaColumnas_(hojaX, 'Soporte Técnico').indices.novedadesPersonal === 4,
+   'un encabezado sin la aclaración entre paréntesis se reconoce igual');
+
+/* Renombrar un campo en el código no puede romper las hojas ya en uso. */
+const hojaY = LIBRO.insertSheet('prueba-alterno');
+hojaY.appendRow(['Año', 'N° de Semana', 'Nombre del Colaborador',
+                 'Análisis de Fallas Frecuentes']);
+ok(S.mapaColumnas_(hojaY, 'Soporte Técnico').indices.fallasFrecuentes === 4,
+   'el nombre anterior de una columna renombrada sigue mapeando (encabezadosAlternos)');
+
+/* Escribir y volver a leer sobre una hoja desordenada: la prueba de fuego. */
+const hojaZ = LIBRO.insertSheet('Soporte desordenado');
+hojaZ.appendRow(['Año', 'N° de Semana', 'Nombre del Colaborador',
+                 'Actividades Centro de Monitoreo',       // D, normalmente J
+                 'Equipos Detenidos / Novedades',         // E
+                 'Informe de gestión Ingenieros de Soporte']);
+const mapaZ = S.mapaColumnas_(hojaZ, 'Soporte Técnico');
+ok(mapaZ.indices.centroMonitoreo === 4 && mapaZ.indices.fallasFrecuentes === 6,
+   'un orden de columnas completamente distinto se respeta',
+   JSON.stringify([mapaZ.indices.centroMonitoreo, mapaZ.indices.fallasFrecuentes]));
+
+/* Una tilde de menos en el nombre de la pestaña no debe crear una hoja duplicada. */
+const hojasAntes = LIBRO.getSheets().length;
+LIBRO.renombrarHoja('Soporte Técnico', 'Soporte Tecnico');
+ok(S.hojaPorNombre_('Soporte Técnico') !== null,
+   'la hoja se encuentra aunque le falte la tilde');
+S.hojaDeArea_('Soporte Técnico');
+ok(LIBRO.getSheets().length === hojasAntes,
+   'y NO se crea una hoja duplicada al lado', LIBRO.getSheets().length - hojasAntes);
+LIBRO.renombrarHoja('Soporte Tecnico', 'Soporte Técnico');
+
+/* ===== 24. Cambios del formulario de Soporte ===== */
+console.log('\n[24] Formulario de Soporte Técnico');
+
+const campoSop = c => S.ESQUEMA['Soporte Técnico'].campos.filter(f => f.clave === c)[0];
+
+ok(campoSop('equiposDetenidos').tipo === 'texto',
+   'Equipos Detenidos / Novedades es un campo abierto', campoSop('equiposDetenidos').tipo);
+ok(campoSop('metricasEmergencia').tipo === 'imagen' && !!campoSop('metricasEmergenciaTexto'),
+   'Métricas Línea de Emergencia tiene imagen y campo de texto');
+ok(campoSop('firstTimeFix').tipo === 'imagen' && !!campoSop('firstTimeFixTexto'),
+   'First Time Fix Rate tiene imagen y campo de texto');
+ok(S.ESQUEMA['Soporte Técnico'].campos.every(f => !f.comentario),
+   'ningún campo arrastra ya el "Comentario del área"');
+ok(campoSop('fallasFrecuentes').titulo === 'Informe de gestión Ingenieros de Soporte',
+   'el campo renombrado muestra su nuevo nombre');
+ok((campoSop('fallasFrecuentes').encabezadosAlternos || [])
+     .indexOf('Análisis de Fallas Frecuentes') >= 0,
+   'y conserva el anterior como alterno, para no romper las hojas en uso');
+
+/* Lo reportado en los campos nuevos tiene que llegar al informe. */
+const mdSop = S.construirInforme_(P.anio, P.semana, false).markdown;
+ok(mdSop.indexOf('87,5% de FTF') >= 0, 'el análisis del FTF aparece en el informe');
+ok(mdSop.indexOf('31 llamadas atendidas') >= 0, 'el de la línea de emergencia también');
+ok(mdSop.indexOf('Gestión de ingenieros de soporte: Los ingenieros cerraron 18 casos') >= 0,
+   'y el informe de gestión de ingenieros, con su nombre nuevo');
+ok(mdSop.indexOf('EMR-7781') >= 0,
+   'los equipos detenidos de Soporte siguen llegando a alertas pese a ser texto libre');
 
 /* ===== 20. Prueba contra la API real (opcional) =====
    Se activa sólo si hay una clave en el entorno, nunca en el repositorio:

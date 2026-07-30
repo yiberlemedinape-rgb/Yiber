@@ -107,6 +107,20 @@ function vinetasAdjuntos_(consolidado, area, clave, etiqueta) {
   return L;
 }
 
+/**
+ * Viñetas de un indicador de Soporte: primero el análisis escrito por el área,
+ * después el enlace al adjunto (modo degradado, ver `vinetasAdjuntos_`).
+ */
+function lineasDeIndicador_(consolidado, ind) {
+  var lineas = [];
+  porArea_(consolidado, 'Soporte Técnico', function (reg) {
+    var t = textoDe_(reg, ind.texto);
+    if (t) lineas.push('- ' + t + ' _(' + reg.nombre + ')_');
+  });
+  return lineas.concat(
+    vinetasAdjuntos_(consolidado, 'Soporte Técnico', ind.imagen, ind.etiqueta));
+}
+
 /** Renderiza una tabla de estructura libre como tabla Markdown. */
 function tablaLibreAMarkdown_(tabla) {
   if (!tabla || !tabla.filas.length) return [];
@@ -359,6 +373,23 @@ function seccionAlertas_(consolidado) {
     L.push('');
   }
 
+  // Soporte Técnico reporta sus equipos detenidos en texto libre desde que el
+  // campo pasó a ser abierto: ya no se puede desglosar por cliente, pero
+  // perderlo sería peor. Se marca 🔴 si el propio texto suena crítico.
+  var equiposTexto = [];
+  porArea_(consolidado, 'Soporte Técnico', function (reg) {
+    var t = textoDe_(reg, 'equiposDetenidos');
+    if (!t) return;
+    equiposTexto.push('- ' + (contieneAlguna_(t, PALABRAS_CRITICAS) ? '🔴 ' : '') +
+                      t + ' _(' + reg.nombre + ', Soporte Técnico)_');
+  });
+  if (equiposTexto.length) {
+    if (!equipos.length) L.push('**Equipos detenidos y novedades de campo**');
+    hubo = true;
+    L = L.concat(equiposTexto);
+    L.push('');
+  }
+
   // OS con demora severa (DPA).
   var osCriticas = [];
   porArea_(consolidado, 'DPA', function (reg) {
@@ -604,23 +635,24 @@ function seccionOperaciones_(consolidado, kpis) {
   var L = ['## ⚙️ OPERACIONES, SAU Y SOPORTE TÉCNICO', ''];
   var hubo = false;
 
-  // First Time Fix Rate: indicador adjunto + comentario del área de soporte.
-  var ftf = vinetasAdjuntos_(consolidado, 'Soporte Técnico', 'firstTimeFix', 'Indicador FTF');
-  if (ftf.length) {
-    hubo = true;
-    L.push('**First Time Fix Rate (FTF)**');
-    L = L.concat(ftf);
-    L.push('');
-  }
-
-  // Línea de emergencia: tablero adjunto.
-  var emergencia = vinetasAdjuntos_(consolidado, 'Soporte Técnico',
-                                    'metricasEmergencia', 'Tablero de la línea');
-  if (emergencia.length) {
-    hubo = true;
-    L.push('**Línea de emergencia**');
-    L = L.concat(emergencia);
-    L.push('');
+  // First Time Fix Rate y línea de emergencia. La cifra vive en la imagen —que
+  // sólo Gemini sabe leer— y el análisis en un campo de texto propio. El texto
+  // va primero: es lo que se entiende sin abrir nada, y en este informe de
+  // respaldo el enlace al adjunto es el último recurso, no el contenido.
+  var indicadores = [
+    { imagen: 'firstTimeFix', texto: 'firstTimeFixTexto',
+      titulo: 'First Time Fix Rate (FTF)', etiqueta: 'Indicador FTF' },
+    { imagen: 'metricasEmergencia', texto: 'metricasEmergenciaTexto',
+      titulo: 'Línea de emergencia', etiqueta: 'Tablero de la línea' }
+  ];
+  for (var n = 0; n < indicadores.length; n++) {
+    var lineas = lineasDeIndicador_(consolidado, indicadores[n]);
+    if (lineas.length) {
+      hubo = true;
+      L.push('**' + indicadores[n].titulo + '**');
+      L = L.concat(lineas);
+      L.push('');
+    }
   }
 
   // Efectividad DPA.
@@ -685,8 +717,11 @@ function seccionOperaciones_(consolidado, kpis) {
   porArea_(consolidado, 'Soporte Técnico', function (reg) {
     var t = textoDe_(reg, 'centroMonitoreo');
     if (t) monitoreo.push('- ' + t + ' _(' + reg.nombre + ')_');
-    var fallas = textoDe_(reg, 'fallasFrecuentes');
-    if (fallas) monitoreo.push('- Fallas frecuentes: ' + fallas + ' _(' + reg.nombre + ')_');
+    var gestion = textoDe_(reg, 'fallasFrecuentes');
+    if (gestion) {
+      monitoreo.push('- Gestión de ingenieros de soporte: ' + gestion +
+                     ' _(' + reg.nombre + ')_');
+    }
   });
   var vibraciones = recolectar_(consolidado, ['Soporte Técnico'], 'analisisVibraciones');
   for (var v = 0; v < vibraciones.length; v++) {

@@ -30,6 +30,18 @@ function indiceColumna_(letra) {
   return n;
 }
 
+/** Letra de columna a partir del índice (1 → A, 27 → AA). Inversa de la anterior. */
+function letraColumna_(indice) {
+  var n = Number(indice);
+  var letra = '';
+  while (n > 0) {
+    var resto = (n - 1) % 26;
+    letra = String.fromCharCode(65 + resto) + letra;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letra;
+}
+
 /**
  * Devuelve la definición del área o lanza un error accionable.
  *
@@ -58,12 +70,122 @@ function areaOError_(area) {
     CONFIG.HOJA_USUARIOS + '", agrégalo a ALIAS_CARGOS en Config.gs.');
 }
 
+/**
+ * Busca una hoja tolerando diferencias de tildes, mayúsculas y espacios.
+ *
+ * `getSheetByName` distingue "Soporte Técnico" de "Soporte Tecnico". Sin esta
+ * tolerancia, una tilde de menos en la pestaña hacía que el sistema no
+ * encontrara la hoja y creara **otra al lado**, vacía y con sus propios
+ * encabezados: exactamente el síntoma de "está generando columnas incorrectas".
+ *
+ * @return {Sheet|null}
+ */
+function hojaPorNombre_(nombre) {
+  var libro = libro_();
+  var directa = libro.getSheetByName(nombre);
+  if (directa) return directa;
+
+  var objetivo = normalizar_(nombre);
+  var hojas = libro.getSheets();
+  for (var i = 0; i < hojas.length; i++) {
+    if (normalizar_(hojas[i].getName()) === objetivo) return hojas[i];
+  }
+  return null;
+}
+
 /** Hoja del área (la crea con encabezados si no existe). */
 function hojaDeArea_(area) {
   var def = areaOError_(area);
-  var hoja = libro_().getSheetByName(def.hoja);
+  var hoja = hojaPorNombre_(def.hoja);
   if (!hoja) hoja = crearHojaArea_(area);
   return hoja;
+}
+
+/** Texto de encabezado sin la aclaración entre paréntesis. */
+function cabeceraBase_(texto) {
+  var corte = String(texto || '').indexOf('(');
+  return normalizar_(corte > 0 ? String(texto).slice(0, corte) : texto);
+}
+
+/**
+ * Resuelve en qué columna real de la hoja vive cada campo del área.
+ *
+ * ESTE ES EL MAPEO QUE MANDA. Antes, cada campo se leía y se escribía en la
+ * letra fija declarada en el ESQUEMA (`campo.col`), sin mirar los encabezados
+ * reales. Bastaba con que alguien insertara, moviera o renombrara una columna en
+ * Sheets para que todos los datos cayeran desplazados una posición: se escribía
+ * el análisis de fallas bajo "Centro de Monitoreo" y nadie se enteraba.
+ *
+ * Ahora se busca cada campo por su encabezado, en tres pasadas de más estricta a
+ * más tolerante:
+ *   1. El `encabezado` exacto del ESQUEMA.
+ *   2. Cualquiera de sus `encabezadosAlternos` (nombres anteriores, para que
+ *      renombrar un campo en el código no rompa las hojas ya en uso).
+ *   3. El texto sin la aclaración entre paréntesis, que es lo que la gente suele
+ *      dejar escrito en la hoja.
+ *
+ * `campo.col` queda sólo como respaldo para cuando el encabezado no aparece —
+ * hoja recién creada, o columna que todavía nadie ha añadido.
+ *
+ * @return {Object} { indices: {clave: col1Based}, porDefecto: [campos], ancho }
+ */
+function mapaColumnas_(hoja, area) {
+  var def = areaOError_(area);
+  var ultima = hoja.getLastColumn();
+  var cabecera = ultima > 0 ? hoja.getRange(1, 1, 1, ultima).getValues()[0] : [];
+
+  var exactos = {};
+  var bases = {};
+  for (var c = 0; c < cabecera.length; c++) {
+    var texto = normalizar_(cabecera[c]);
+    if (!texto) continue;
+    // El primero gana: si alguien duplicó un encabezado, manda el de la
+    // izquierda, que es el que se ve primero en la hoja.
+    if (exactos[texto] === undefined) exactos[texto] = c + 1;
+    var base = cabeceraBase_(cabecera[c]);
+    if (base && bases[base] === undefined) bases[base] = c + 1;
+  }
+
+  var mapa = { indices: {}, porDefecto: [], ancho: Math.max(3, ultima) };
+
+  for (var i = 0; i < def.campos.length; i++) {
+    var campo = def.campos[i];
+    var col = columnaDeCampo_(campo, exactos, bases);
+
+    if (!col) {
+      col = indiceColumna_(campo.col);
+      mapa.porDefecto.push(campo);
+    }
+
+    mapa.indices[campo.clave] = col;
+    mapa.ancho = Math.max(mapa.ancho, col);
+  }
+
+  return mapa;
+}
+
+/**
+ * Columna (1-based) donde vive un campo según los encabezados de la hoja.
+ * Devuelve 0 si ninguno de sus nombres aparece.
+ *
+ * Es una función aparte a propósito. En Apps Script (ES5) `var` es de ámbito de
+ * función, no de bloque: escrito dentro del bucle de `mapaColumnas_`, el
+ * resultado de un campo sobrevivía a la siguiente vuelta y todos los campos
+ * acababan apuntando a la columna del primero. Aislarlo hace imposible ese error.
+ */
+function columnaDeCampo_(campo, exactos, bases) {
+  var candidatos = [campo.encabezado || campo.titulo, campo.titulo]
+    .concat(campo.encabezadosAlternos || []);
+
+  for (var i = 0; i < candidatos.length; i++) {
+    var exacta = exactos[normalizar_(candidatos[i])];
+    if (exacta) return exacta;
+  }
+  for (var j = 0; j < candidatos.length; j++) {
+    var aproximada = bases[cabeceraBase_(candidatos[j])];
+    if (aproximada) return aproximada;
+  }
+  return 0;
 }
 
 /* ===================== Serialización de tablas ===================== */
@@ -193,7 +315,7 @@ function parseTablaLibre_(valor) {
  * Convierte una fila de la hoja en un registro estructurado.
  * `fila` es el array de valores completo de la fila (0-based por columna).
  */
-function filaARegistro_(area, fila) {
+function filaARegistro_(area, fila, mapa) {
   var def = areaOError_(area);
   var registro = {
     area: area,
@@ -205,7 +327,7 @@ function filaARegistro_(area, fila) {
 
   for (var i = 0; i < def.campos.length; i++) {
     var campo = def.campos[i];
-    var valor = fila[indiceColumna_(campo.col) - 1];
+    var valor = fila[mapa.indices[campo.clave] - 1];
     if (campo.tipo === 'tabla' || campo.tipo === 'imagen') {
       registro.campos[campo.clave] = { tipo: campo.tipo, filas: parseTabla_(campo, valor) };
     } else if (campo.tipo === 'tablaLibre') {
@@ -251,25 +373,27 @@ function leerRegistro_(area, anio, semana, nombre) {
   var fila = buscarFila_(hoja, anio, semana, nombre);
   if (fila < 0) return null;
 
-  var valores = hoja.getRange(fila, 1, 1, anchoArea_(area)).getValues()[0];
-  return filaARegistro_(area, valores);
+  var mapa = mapaColumnas_(hoja, area);
+  var valores = hoja.getRange(fila, 1, 1, mapa.ancho).getValues()[0];
+  return filaARegistro_(area, valores, mapa);
 }
 
 /** Todos los registros de un área para una semana. */
 function leerSemanaArea_(area, anio, semana) {
-  var hoja = libro_().getSheetByName(areaOError_(area).hoja);
+  var hoja = hojaPorNombre_(areaOError_(area).hoja);
   if (!hoja) return [];
 
   var ultima = hoja.getLastRow();
   if (ultima < 2) return [];
 
-  var valores = hoja.getRange(2, 1, ultima - 1, anchoArea_(area)).getValues();
+  var mapa = mapaColumnas_(hoja, area);
+  var valores = hoja.getRange(2, 1, ultima - 1, mapa.ancho).getValues();
   var salida = [];
 
   for (var i = 0; i < valores.length; i++) {
     if (aNumero_(valores[i][0]) === Number(anio) &&
         aNumero_(valores[i][1]) === Number(semana)) {
-      salida.push(filaARegistro_(area, valores[i]));
+      salida.push(filaARegistro_(area, valores[i], mapa));
     }
   }
   return salida;
@@ -296,7 +420,8 @@ function guardarRegistro_(area, datos) {
     throw new Error('Faltan Año, N° de Semana o Nombre del Colaborador.');
   }
 
-  var ancho = anchoArea_(area);
+  var mapa = mapaColumnas_(hoja, area);
+  var ancho = mapa.ancho;
   var fila = new Array(ancho);
   for (var k = 0; k < ancho; k++) fila[k] = '';
 
@@ -309,7 +434,7 @@ function guardarRegistro_(area, datos) {
   for (var i = 0; i < def.campos.length; i++) {
     var campo = def.campos[i];
     var entrada = datos.campos ? datos.campos[campo.clave] : null;
-    var idx = indiceColumna_(campo.col) - 1;
+    var idx = mapa.indices[campo.clave] - 1;
 
     if (campo.tipo === 'imagen') {
       // Sube a Drive lo que sea nuevo y deja en la celda nombre + enlace.
@@ -388,8 +513,12 @@ function inicializarHojas_() {
       continue;
     }
 
+    // Se informa del mapeo REAL, que es el que se va a usar para leer y
+    // escribir. Comparar contra las letras del ESQUEMA sólo diría si la hoja se
+    // parece a la plantilla; lo que importa es dónde van a caer los datos.
     var ancho = Math.max(anchoArea_(area), hoja.getLastColumn());
     var actuales = hoja.getRange(1, 1, 1, ancho).getValues()[0];
+    var mapa = mapaColumnas_(hoja, area);
     var problemas = [];
 
     for (var b = 0; b < CONFIG.ENCABEZADOS_BASE.length; b++) {
@@ -398,17 +527,32 @@ function inicializarHojas_() {
                        CONFIG.ENCABEZADOS_BASE[b] + '"');
       }
     }
-    for (var i = 0; i < def.campos.length; i++) {
-      var campo = def.campos[i];
-      var esperado = campo.encabezado || campo.titulo;
-      var actual = actuales[indiceColumna_(campo.col) - 1];
-      if (normalizar_(actual) !== normalizar_(esperado)) {
-        problemas.push('col ' + campo.col + ': "' + texto_(actual) + '"');
+
+    // Campos cuyo encabezado no está en la hoja: se escribirán en su columna de
+    // respaldo. Si ahí hay algo escrito, hay que decirlo, porque se sobrescribe.
+    for (var i = 0; i < mapa.porDefecto.length; i++) {
+      var campo = mapa.porDefecto[i];
+      var ocupada = texto_(actuales[indiceColumna_(campo.col) - 1]);
+      problemas.push('falta el encabezado "' + (campo.encabezado || campo.titulo) +
+                     '"; se usará la columna ' + campo.col +
+                     (ocupada ? ', que hoy dice "' + ocupada + '"' : ', que está vacía'));
+    }
+
+    // Campos que sí se encontraron, pero movidos respecto del ESQUEMA. No es un
+    // error —el mapeo por encabezado lo resuelve— pero conviene saberlo.
+    var movidos = [];
+    for (var j = 0; j < def.campos.length; j++) {
+      var c = def.campos[j];
+      var real = mapa.indices[c.clave];
+      if (real !== indiceColumna_(c.col) && mapa.porDefecto.indexOf(c) < 0) {
+        movidos.push(c.titulo + ' → ' + letraColumna_(real));
       }
     }
 
     lineas.push((problemas.length ? '⚠️ ' : '✅ ') + def.hoja +
-                (problemas.length ? ' → revisar ' + problemas.join('; ') : ''));
+                (problemas.length ? ' → ' + problemas.join('; ') : '') +
+                (movidos.length ? ' · columnas movidas (se respetan): ' +
+                                  movidos.join(', ') : ''));
   }
 
   // Hoja de usuarios.

@@ -200,7 +200,42 @@ Detalles que explican por qué está montado así:
   archivo sino incrustada en el HTML del portapapeles; ese caso también se
   reconoce.
 
-### 3.5 `KPI_Datos`
+### 3.5 Cómo se localiza cada columna
+
+**El encabezado manda, no la posición.** Al leer o escribir, el sistema busca
+cada campo por el texto de su encabezado en la fila 1 de la hoja real. La letra
+declarada en el `ESQUEMA` (`col: 'E'`) es sólo el **respaldo** para cuando ese
+encabezado todavía no existe — hoja recién creada, o columna que nadie ha
+añadido aún.
+
+La búsqueda va de más estricta a más tolerante:
+
+1. El `encabezado` exacto del `ESQUEMA`.
+2. Cualquiera de sus `encabezadosAlternos` — los nombres anteriores del campo.
+   Gracias a esto, **renombrar un campo en el código no rompe las hojas ya en
+   uso**: siguen mapeando por su nombre viejo hasta que alguien las renombre.
+3. El texto sin la aclaración entre paréntesis, que es lo que la gente suele
+   dejar escrito en la hoja.
+
+> ⚠️ **Esto era un defecto real, no una mejora cosmética.** Antes todo se leía y
+> se escribía en la letra fija del `ESQUEMA`, sin mirar los encabezados. Bastaba
+> con que alguien **insertara, moviera o renombrara una columna en Sheets** para
+> que cada campo cayera desplazado: el análisis de fallas se escribía bajo
+> "Centro de Monitoreo" y nadie se enteraba, porque la hoja seguía pareciendo
+> correcta. El menú de verificación lo detectaba y lo pintaba con ⚠️, pero nada
+> actuaba sobre ese aviso.
+
+El nombre de la **pestaña** también se busca con tolerancia a tildes, mayúsculas
+y espacios de más. Antes, una tilde de menos en "Soporte Técnico" hacía que el
+sistema no encontrara la hoja y **creara otra al lado**, vacía y con sus propios
+encabezados — el otro síntoma de "está generando columnas incorrectas".
+
+**Verificar / crear hojas** informa ahora del mapeo real: qué campos no
+encontraron su encabezado y en qué columna de respaldo van a escribir (avisando
+si esa columna ya tiene algo), y qué columnas están movidas respecto del
+`ESQUEMA` — que no es un error, porque se respetan.
+
+### 3.6 `KPI_Datos`
 
 `Año | N° de Semana | Área | Nombre | Métrica | Valor`
 
@@ -686,7 +721,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~295 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~315 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -717,6 +752,11 @@ Dos bloques valen la pena por separado:
 - **Detalle de dirección** (§6.1): que la sección exista en las directrices y en
   el informe determinista, con un subtítulo por director, sus siete temas, las
   tablas reproducidas como tablas y los valores sin redondear.
+- **Mapeo de columnas** (§3.5): que cada campo resuelva a una columna distinta
+  —el bug original hacía que todos apuntaran a la del primero—, que una columna
+  insertada en medio se siga hasta su nueva posición, que un encabezado
+  renombrado siga mapeando por su nombre anterior, y que una tilde de menos en la
+  pestaña no genere una hoja duplicada.
 - **Pegado en la interfaz** (§3.4): `Js.html` se carga en un navegador simulado
   y se **dispara un evento `paste` de verdad** para comprobar dónde aterriza.
   Cubre el encaminamiento (imagen → recuadro de imagen, texto tabulado → recuadro
