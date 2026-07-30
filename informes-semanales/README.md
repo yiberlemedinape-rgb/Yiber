@@ -157,7 +157,6 @@ legible y auditable. La carpeta se crea sola:
         S31 - First Time Fix Rate (FTF) - Edilfonso Vaca.png
 ```
 
-- **Pegar con Ctrl+V, arrastrar o elegir archivo**: las tres vías funcionan.
 - Volver a enviar el reporte **reemplaza** la imagen (mismo nombre) en vez de
   acumular duplicados; la anterior queda en la papelera de Drive.
 - Un adjunto ya guardado **no se vuelve a subir**: el formulario devuelve sólo
@@ -165,10 +164,41 @@ legible y auditable. La carpeta se crea sola:
 - Tope de 8 MB por archivo (`CONFIG.ADJUNTO_MAX_MB`).
 
 Para las **tablas de Excel** (`tablaLibre`) no se sube archivo: se copia el
-rango en Excel y se pega en el recuadro. El portapapeles entrega el rango
-separado por tabuladores, así que se conserva la estructura original —
-encabezados y columnas— y, a diferencia de una captura, **las cifras siguen
-siendo datos**: se pueden leer, sumar y reproducir como tabla en el informe.
+rango en Excel y se pega en el recuadro. A diferencia de una captura, así **las
+cifras siguen siendo datos**: se pueden leer, sumar y reproducir como tabla en
+el informe. Se prefiere el HTML que Excel deja en el portapapeles (un `<table>`
+real, que conserva celdas vacías, combinadas y valores con saltos de línea) y se
+recurre al texto tabulado sólo como respaldo.
+
+#### Cómo pegar: las tres vías
+
+| Vía | Cómo |
+|---|---|
+| **Ctrl+V** | Clic en el recuadro (queda resaltado) y `Ctrl+V` / `⌘+V`. |
+| **Botón** | `📋 Pegar imagen` o `📋 Pegar tabla`. |
+| **Arrastrar** o `📁 Elegir archivo` | Sólo para imágenes. |
+
+Detalles que explican por qué está montado así:
+
+- Un evento `paste` **sólo llega al elemento que tiene el foco**. Por eso el clic
+  en el recuadro se limita a enfocarlo: si abriera el explorador de archivos, el
+  diálogo se llevaría el foco y `Ctrl+V` dejaría de funcionar. Abrir el
+  explorador es un botón aparte, y no es un detalle cosmético — era exactamente
+  la causa de que pegar no funcionara.
+- Además se escucha el pegado **a nivel de documento** y se encamina al recuadro
+  activo, para que `Ctrl+V` también sirva nada más abrir el formulario, cuando el
+  foco todavía está en el cuerpo de la página. Si hay varios recuadros del mismo
+  tipo y no se ha elegido ninguno, el sistema **pide elegir** en vez de adivinar.
+- Pegar texto dentro de una caja de texto sigue pegando texto. Sólo se desvía al
+  recuadro cuando lo que hay en el portapapeles es una imagen — así se puede
+  pegar la captura estando el cursor en el comentario del área.
+- Los botones `📋 Pegar` usan la API de portapapeles del navegador. El marco en
+  que Apps Script sirve la interfaz **no siempre concede ese permiso**; cuando lo
+  niega, el botón deja el recuadro enfocado y pide el atajo, que nunca depende de
+  permisos.
+- Una imagen copiada desde una página o un documento a veces no viaja como
+  archivo sino incrustada en el HTML del portapapeles; ese caso también se
+  reconoce.
 
 ### 3.5 `KPI_Datos`
 
@@ -229,7 +259,6 @@ pegado dentro de un `.gs`.
 | Propiedad | Obligatoria | Para qué sirve |
 |---|---|---|
 | `CORREO_GERENTE` | ✅ | Destinatario del informe semanal. |
-| `ADMIN_CORREOS` | ✅ | Correos del **Administrador** (separados por coma): los únicos que pueden ejecutar el envío manual y las acciones de configuración. Si se deja vacía, sólo puede operar el propietario del libro. |
 | `CORREO_COPIA` | — | Copias del informe (separadas por coma). |
 | `GEMINI_API_KEY` | — | Clave de la API de Gemini (se obtiene en [Google AI Studio](https://aistudio.google.com/apikey)). Activa la redacción asistida; sin ella se usa el informe automático. |
 | `MODELO_IA` | — | Modelo a usar. Por defecto `gemini-2.5-flash`. Se admite escribirlo con o sin el prefijo `models/`. |
@@ -238,6 +267,11 @@ pegado dentro de un `.gs`.
 > 🔑 **La clave de Gemini no va en el código.** Va aquí, en las propiedades del
 > script, y `Ia.gs` la lee con `PropertiesService`. Escrita dentro de un `.gs`
 > quedaría versionada en Git y visible para cualquiera con acceso al proyecto.
+
+> 👤 **El Administrador no se configura aquí.** Se otorga escribiendo
+> `Administrador` en la columna **Cargo** de la hoja `Usuario` (§5.3). No hay
+> ninguna propiedad de script para eso: un permiso repartido en dos sitios
+> acabaría contradiciéndose.
 
 ### 4.3 Verificar la estructura
 
@@ -296,8 +330,8 @@ Menú **📊 Informes Semanales → 🔒 Instalar envío automático (viernes 6:
 - El disparador corre con la cuenta que lo instaló: el correo sale desde esa
   cuenta y consume su cuota diaria de Gmail. Instálalo con la cuenta que quieras
   que figure como remitente.
-- Si el envío falla, el propio disparador avisa por correo a
-  `ADMIN_CORREOS` con el motivo del error.
+- Si el envío falla, el propio disparador avisa por correo a quienes tengan el
+  cargo de **Administrador** en la hoja `Usuario`, con el motivo del error.
 
 ---
 
@@ -306,11 +340,15 @@ Menú **📊 Informes Semanales → 🔒 Instalar envío automático (viernes 6:
 Hay **dos roles y nada más**: el colaborador, que sólo registra su propio
 reporte; y el Administrador, único que puede disparar el informe a mano.
 
+Los dos salen del **mismo sitio**: la columna `Cargo` de la hoja `Usuario`. Ese
+es el único mando del control de acceso — quien administre el sistema no necesita
+entrar al editor de Apps Script para cambiar quién puede hacer qué.
+
 ### 5.1 Colaborador — la hoja `Usuario` es la lista blanca
 
 - El correo se toma de la sesión de Google, no de un campo del formulario: nadie
   puede reportar a nombre de otro colaborador desde la interfaz.
-- El `Cargo` se traduce al área con `areaDeCargo()`, que acepta variantes
+- El `Cargo` se traduce al área con `areaDeCargo_()`, que acepta variantes
   razonables (`SAU`, `Asesores CAN` → `Asesores KAM`, con o sin tildes).
 - Si el correo no está en la hoja, la interfaz no muestra ningún formulario.
 - Cada llamada al servidor (`apiSesion`, `apiCargarRegistro`, `apiGuardar`)
@@ -330,14 +368,19 @@ corresponden al rol**:
 | **Colaborador** | Su área, sus campos y su registro | Únicamente el formulario de su área |
 | **Administrador** | Destinatario, copia y estado de la IA | Únicamente el panel del informe: vista previa del correo y botón de envío |
 
-El administrador **no ve ningún formulario**. Si además debe entregar su propio
-reporte semanal, se activa `CONFIG.ADMIN_TAMBIEN_REPORTA = true` en `Config.gs`
-y entonces se le muestran las dos cosas.
+El administrador **no ve ningún formulario**: el cargo `Administrador` no
+corresponde a ninguna área, porque quien lo tiene consolida lo que reportan las
+demás en vez de reportar un área propia.
 
-> Esto importa en la práctica: si el administrador está también en la hoja
-> `Usuario` (por ejemplo, alguien de SAU que administra el sistema), con la
-> configuración por defecto **pierde el acceso a su propio formulario**. Ese
-> interruptor existe justamente para ese caso.
+Si la misma persona debe además entregar su reporte semanal, se le escribe el
+cargo compuesto —`Administrador SAU`— y se activa
+`CONFIG.ADMIN_TAMBIEN_REPORTA = true` en `Config.gs`. Entonces ve las dos cosas:
+el panel del informe y el formulario de su área.
+
+> Esto importa en la práctica: quien administra el sistema suele estar también en
+> la hoja como colaborador de un área. Cambiarle el cargo a `Administrador` a
+> secas le da el permiso pero **le quita su formulario**; el cargo compuesto es la
+> forma de conservar los dos.
 
 ### 5.3 Dónde vive de verdad el permiso
 
@@ -362,11 +405,19 @@ pueda quitarla sin que el banco de pruebas falle.
 El mismo criterio aplica al menú de Google Sheets, donde cada acción pasa por
 `exigirAdministrador_()`:
 
-- **Administrador** = correo listado en la propiedad `ADMIN_CORREOS`.
-- Si esa propiedad aún no se ha configurado, se acepta únicamente al
-  **propietario del libro**, para que el sistema no quede sin nadie que pueda
-  operarlo el primer día. En cuanto se configura `ADMIN_CORREOS`, esa excepción
-  deja de aplicar.
+- **Administrador** = quien tenga `Administrador` en la columna **Cargo** de la
+  hoja `Usuario`. No hay ninguna lista de correos aparte: el permiso se otorga y
+  se retira escribiendo en esa celda, en el mismo sitio donde ya se decide qué
+  formulario ve cada persona.
+- Cambiarle el cargo a un área le quita el rol y le devuelve su formulario. El
+  efecto es inmediato: no hay que volver a publicar nada.
+- Se acepta también `Admin`, y un cargo compuesto como `Administrador SAU` para
+  quien administra el sistema y además debe entregar su propio reporte (requiere
+  `CONFIG.ADMIN_TAMBIEN_REPORTA = true`). Un cargo que sólo se *parece*, como
+  `Administrativo` o `Director Administrativo`, no otorga nada.
+- Mientras **nadie** tenga ese cargo se acepta al **propietario del libro**, para
+  que un libro recién creado no quede sin nadie que pueda operarlo. En cuanto se
+  escribe el primer Administrador, esa excepción deja de aplicar.
 - Quien no sea administrador ve el menú, pero al hacer clic recibe un aviso
   explicando cómo pedir acceso. No se ejecuta nada.
 
@@ -563,7 +614,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~215 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~250 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -582,9 +633,18 @@ Dos bloques valen la pena por separado:
   a `exigirAdministrador_()`.
 - **Vista previa = correo enviado** (§5.4): se comparan ambos resultados y la
   prueba falla si dejan de coincidir.
-- **Rol de Administrador** (§5.3): con y sin `ADMIN_CORREOS`, la excepción del
-  propietario, insensibilidad a mayúsculas y el mensaje de error que explica
-  cómo pedir acceso.
+- **Rol de Administrador** (§5.3): que el cargo lo otorgue y lo retire, que un
+  cargo parecido (`Administrativo`) no lo herede, la excepción del propietario
+  mientras la hoja no nombre a nadie, y el mensaje de error que dice en qué celda
+  se concede.
+- **Pegado en la interfaz** (§3.4): `Js.html` se carga en un navegador simulado
+  y se **dispara un evento `paste` de verdad** para comprobar dónde aterriza.
+  Cubre el encaminamiento (imagen → recuadro de imagen, texto tabulado → recuadro
+  de tabla, negativa a adivinar cuando hay dos candidatos), que pegar texto en un
+  `textarea` siga siendo pegar texto, el troceado del TSV con celdas vacías,
+  comillas escapadas y saltos de línea dentro de una celda, y —de forma estática
+  sobre el código— que el clic en el recuadro ya **no** abra el explorador de
+  archivos, que es lo que rompía el pegado.
 
 La integración con Gemini se prueba con la API simulada, así que se verifica
 sin gastar cuota ni depender de la red: forma del `systemInstruction` y del
@@ -592,6 +652,26 @@ sin gastar cuota ni depender de la red: forma del `systemInstruction` y del
 de las partes `thought`, y los cinco modos de fallo que caen al informe
 determinista (HTTP 429, bloqueo de seguridad, respuesta vacía por
 `MAX_TOKENS`, respuesta truncada con texto y caída de red).
+
+### 9.1 Prueba contra la API real
+
+Hay además una prueba que sí llama a Gemini, y que sólo se ejecuta si le pasas
+una clave por el entorno:
+
+```bash
+GEMINI_API_KEY=tu-clave node pruebas/prueba-local.js
+GEMINI_API_KEY=tu-clave VER=1 node pruebas/prueba-local.js   # imprime el informe real
+```
+
+Sin la variable, la sección se omite con un aviso. **La clave nunca se escribe en
+el repositorio**: se lee del entorno, igual que en producción se lee de las
+propiedades del script.
+
+Comprueba lo que ninguna simulación puede: que la clave sea válida, que el modelo
+exista, que las imágenes de la semana lleguen de verdad, y que el informe que
+redacta el modelo real traiga las cinco secciones, use negritas y **no remita al
+lector a ningún adjunto ni nombre archivos** — la directriz añadida en §6.3, que
+sólo un modelo real puede confirmar que se está respetando.
 
 Ejecútalo antes de tocar el `ESQUEMA`: si renombras una clave o una columna,
 las pruebas lo detectan de inmediato.
@@ -618,7 +698,7 @@ informe en lugar del formulario:
 | Saber quién falta por reportar | Está en la vista previa: el anexo de cobertura al final del informe. |
 
 Y desde el menú de Google Sheets, para la configuración
-(🔒 = requiere estar en `ADMIN_CORREOS`):
+(🔒 = requiere el cargo `Administrador` en la hoja `Usuario`):
 
 | Quiero… | Cómo |
 |---|---|
@@ -675,7 +755,7 @@ Revisa en orden, desde **🔒 Estado de la configuración**:
 1. ¿Dice `Envío automático: instalado`? Si no, falta el paso §4.5.
 2. ¿`CORREO_GERENTE` está configurado?
 3. Mira **Ejecuciones** en el editor: si el disparador falló, el propio sistema
-   envía el motivo a `ADMIN_CORREOS`.
+   envía el motivo a quienes tengan el cargo de `Administrador`.
 4. Cuota de Gmail: el correo sale desde la cuenta que instaló el disparador.
 
 ### El informe salió sin análisis de IA

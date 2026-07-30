@@ -192,8 +192,9 @@ function menuEstado() {
     var lineas = [
       'Correo del gerente: ' + (props.getProperty(CONFIG.PROP_CORREO_GERENTE) || '⚠️ sin configurar'),
       'Copias: ' + (props.getProperty(CONFIG.PROP_COPIA_INFORME) || '—'),
-      'Administradores: ' + (admins.length ? admins.join(', ')
-        : '⚠️ sin configurar (sólo el propietario del libro puede operar)'),
+      'Administradores (cargo "' + CONFIG.CARGO_ADMIN + '" en la hoja "' +
+        CONFIG.HOJA_USUARIOS + '"): ' + (admins.length ? admins.join(', ')
+        : '⚠️ ninguno; por ahora sólo el propietario del libro puede operar'),
       'Redacción con IA: ' + (iaDisponible_()
         ? 'activa (' + modeloIa_() + ')' : 'inactiva (informe automático)'),
       'Zona horaria: ' + CONFIG.ZONA_HORARIA,
@@ -254,7 +255,9 @@ function apiSesion() {
     usuario: {
       nombre: usuario ? usuario.nombre : correoSesion_(),
       correo: usuario ? usuario.correo : correoSesion_(),
-      cargo: esAdmin ? 'Administrador' : (usuario ? usuario.cargo : '')
+      // El cargo se muestra tal como está escrito en la hoja: es el mismo dato
+      // que otorga el rol, así que quien lo lee ve exactamente de dónde sale.
+      cargo: usuario ? usuario.cargo : (esAdmin ? CONFIG.CARGO_ADMIN : '')
     },
     periodo: {
       anio: periodo.anio,
@@ -273,8 +276,11 @@ function apiSesion() {
   }
 
   // El formulario se entrega al colaborador, y al administrador sólo si se
-  // habilitó CONFIG.ADMIN_TAMBIEN_REPORTA y además está en la hoja "Usuario".
-  var mostrarFormulario = usuario && (!esAdmin || CONFIG.ADMIN_TAMBIEN_REPORTA);
+  // habilitó CONFIG.ADMIN_TAMBIEN_REPORTA. Se exige `usuario.area` porque el
+  // cargo "Administrador" no corresponde a ninguna hoja: quien lo tiene
+  // consolida lo que reportan las áreas, no reporta un área propia.
+  var mostrarFormulario = usuario && usuario.area &&
+    (!esAdmin || CONFIG.ADMIN_TAMBIEN_REPORTA);
   if (mostrarFormulario) {
     var def = ESQUEMA[usuario.area];
     base.usuario.area = usuario.area;
@@ -399,9 +405,10 @@ function apiGuardar(datos) {
  * administrador es cosmético.
  *
  * La barrera real es la primera línea de cada una: `exigirAdministrador_()`, que
- * compara el correo de la sesión de Google contra ADMIN_CORREOS. Un colaborador
- * que invoque cualquiera de las dos desde la consola recibe un error y nada más
- * ocurre. Las pruebas verifican exactamente ese escenario.
+ * busca el correo de la sesión de Google en la hoja "Usuario" y comprueba que su
+ * Cargo sea el de Administrador. Un colaborador que invoque cualquiera de las
+ * dos desde la consola recibe un error y nada más ocurre. Las pruebas verifican
+ * exactamente ese escenario.
  *
  * El informe sale por tres caminos, todos autorizados:
  *   1. Automático: disparador `enviarInformeSemanal` (ver CONFIG.ENVIO_*).

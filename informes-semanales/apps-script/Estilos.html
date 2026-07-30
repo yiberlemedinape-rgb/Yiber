@@ -151,8 +151,19 @@
   .zona-adjunto:hover, .zona-adjunto:focus, .zona-adjunto.sobre {
     background: var(--azul-suave); border-color: var(--azul-alto); outline: none;
   }
+  /* La zona que recibirá el próximo Ctrl+V: sin esta señal, con dos recuadros
+     en el mismo formulario, el usuario no sabe dónde va a caer lo que pegue. */
+  .zona-adjunto.activa {
+    background: var(--azul-suave); border-color: var(--azul-alto);
+    border-style: solid; box-shadow: 0 0 0 3px rgba(0, 87, 165, .10);
+  }
+  .zona-adjunto.esperando { animation: latido 1s ease-in-out 3; }
+  @keyframes latido {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(0, 87, 165, .10); }
+    50%      { box-shadow: 0 0 0 7px rgba(0, 87, 165, .22); }
+  }
   .zona-adjunto b { color: var(--azul); }
-  .enlace-falso { color: var(--azul-alto); text-decoration: underline; }
+  .barra-adjunto { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   .pista { font-size: 12px; color: var(--tenue); margin-top: 4px; }
 
   .lista-adjuntos { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }

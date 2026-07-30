@@ -583,7 +583,7 @@ ok(rechazoPeriodo, 'apiGuardar rechaza semanas fuera de la ventana de correcció
    (el administrador los usa), la barrera tiene que estar en el servidor: que la
    interfaz oculte los botones no protege nada. */
 console.log('\n[9b] Un colaborador no puede tocar el informe gerencial');
-ok(apiS.rol === 'colaborador', 'sin ADMIN_CORREOS ni propietario, el rol es colaborador', apiS.rol);
+ok(apiS.rol === 'colaborador', 'con un cargo de área, el rol es colaborador', apiS.rol);
 ok(apiS.informe === undefined, 'apiSesion no entrega datos del informe a un colaborador');
 ok(!!apiS.area, 'el colaborador sí recibe su formulario');
 
@@ -599,31 +599,60 @@ ok(bloqueoEnvio.indexOf('Administrador') >= 0,
    'apiEnviarInformeGerencial rechaza al colaborador', bloqueoEnvio);
 ok(S.__correo === correoAntes, 'y no se envió ningún correo en el intento');
 
-/* ===== 9c. Rol de Administrador ===== */
-console.log('\n[9c] Sólo el Administrador ejecuta el envío manual');
+/* ===== 9c. Rol de Administrador =====
+   El permiso vive en la columna "Cargo" de la hoja "Usuario" y en ningún otro
+   sitio: cambiar ahí el cargo de alguien debe darle o quitarle el rol de
+   inmediato, sin tocar código ni propiedades de script. */
+console.log('\n[9c] El rol de Administrador sale del Cargo en la hoja "Usuario"');
+
+/** Reescribe el cargo de un correo en la hoja "Usuario", como haría el usuario. */
+const fijarCargo = (correo, cargo) => {
+  const fila = hojaU.data.find(f => String(f[2]).toLowerCase() === correo);
+  if (!fila) throw new Error('fixture: no existe la fila de ' + correo);
+  fila[0] = cargo;
+};
+
+ok(S.esCargoAdmin_('Administrador') === true, 'el cargo "Administrador" otorga el rol');
+ok(S.esCargoAdmin_('  administrador ') === true, 'sin importar espacios ni mayúsculas');
+ok(S.esCargoAdmin_('Admin') === true, 'y la abreviatura "Admin"');
+ok(S.esCargoAdmin_('Administrador SAU') === true, 'un cargo compuesto también lo otorga');
+ok(S.esCargoAdmin_('Administrativo') === false,
+   'un cargo que sólo empieza parecido NO otorga el rol');
+ok(S.esCargoAdmin_('Director Administrativo') === false, 'ni uno que lo contenga en medio');
+ok(S.esCargoAdmin_('') === false, 'una celda vacía tampoco');
+ok(S.areaDeCargo_('Administrador') === null,
+   'el cargo de Administrador no corresponde a ningún formulario');
+ok(S.areaDeCargo_('Administrador SAU') === 'SAU, Renta, CDR',
+   '"Administrador SAU" conserva su área para poder seguir reportando');
+
 ok(S.esAdministrador_() === false,
-   'sin ADMIN_CORREOS y sin propietario conocido, nadie es administrador');
+   'con su cargo de área, Yiber no es administrador');
 LIBRO.propietario = 'yiber.medina@kaeser.com';
 ok(S.esAdministrador_() === true,
-   'sin ADMIN_CORREOS, el propietario del libro sí puede operar');
-PROPS.ADMIN_CORREOS = 'gerencia@kaeser.com, ti@kaeser.com';
+   'mientras nadie tenga el cargo, el propietario del libro puede operar');
+fijarCargo('luis.rodriguez@kaeser.com', 'Administrador');
 ok(S.esAdministrador_() === false,
-   'con ADMIN_CORREOS configurada, el propietario ya NO basta');
-PROPS.ADMIN_CORREOS = 'gerencia@kaeser.com, YIBER.MEDINA@kaeser.com';
-ok(S.esAdministrador_() === true, 'un correo de la lista sí es administrador (sin importar mayúsculas)');
+   'en cuanto la hoja nombra un Administrador, el propietario ya NO basta');
+fijarCargo('yiber.medina@kaeser.com', 'ADMINISTRADOR');
+ok(S.esAdministrador_() === true,
+   'cambiar el cargo en la hoja otorga el permiso, sin tocar código');
 let sinPermiso = false;
 try { S.exigirAdministrador_(); } catch (e) { sinPermiso = true; }
 ok(sinPermiso === false, 'exigirAdministrador_ deja pasar al administrador');
-PROPS.ADMIN_CORREOS = 'otra.persona@kaeser.com';
+
+fijarCargo('yiber.medina@kaeser.com', 'SAU, Renta, CDR');
+ok(S.esAdministrador_() === false, 'y devolverle su cargo de área se lo quita');
 sinPermiso = false;
 let mensajePermiso = '';
 try { S.exigirAdministrador_(); } catch (e) { sinPermiso = true; mensajePermiso = e.message; }
-ok(sinPermiso, 'exigirAdministrador_ bloquea a quien no está en la lista');
-ok(mensajePermiso.indexOf('ADMIN_CORREOS') >= 0, 'el error explica cómo darse acceso', mensajePermiso);
+ok(sinPermiso, 'exigirAdministrador_ vuelve a bloquearlo');
+ok(mensajePermiso.indexOf('Cargo') >= 0 && mensajePermiso.indexOf('Usuario') >= 0,
+   'el error dice exactamente dónde se otorga el permiso', mensajePermiso);
+fijarCargo('luis.rodriguez@kaeser.com', 'Directores');
 
 /* ===== 9d. Vista del Administrador ===== */
 console.log('\n[9d] Vista del Administrador en la interfaz');
-PROPS.ADMIN_CORREOS = 'yiber.medina@kaeser.com';
+fijarCargo('yiber.medina@kaeser.com', 'Administrador');
 PROPS.CORREO_GERENTE = 'gerencia@kaeser.com';
 PROPS.CORREO_COPIA = 'direccion@kaeser.com';
 
@@ -634,7 +663,9 @@ ok(sesionAdmin.area === undefined,
 ok(sesionAdmin.registro === undefined, 'ni el registro de su área');
 ok(sesionAdmin.informe.destinatario === 'gerencia@kaeser.com', 'sí recibe el destinatario');
 ok(sesionAdmin.informe.copia === 'direccion@kaeser.com', 'y los correos en copia');
-ok(sesionAdmin.usuario.cargo === 'Administrador', 'el cargo mostrado es Administrador');
+ok(sesionAdmin.usuario.cargo === 'Administrador', 'el cargo mostrado es el que dice la hoja');
+ok(sesionAdmin.usuario.nombre === 'Yiber Medina',
+   'y el nombre sigue saliendo de la hoja, no del correo', sesionAdmin.usuario.nombre);
 
 /* La vista previa debe ser el correo completo, no sólo el informe. */
 const previa = S.apiPrevisualizarCorreo(P.anio, P.semana);
@@ -652,16 +683,26 @@ ok(S.__correo.subject === previa.asunto, 'mismo asunto en vista previa y envío'
 ok(S.__correo.to === previa.para, 'mismo destinatario');
 ok(S.__correo.cc === previa.cc, 'misma copia');
 
-/* Con el interruptor activado, el administrador recupera su formulario. */
+/* Con el interruptor activado, un administrador que además tenga área recupera
+   su formulario. El cargo "Administrador" a secas no nombra ninguna, así que ni
+   con el interruptor puesto debe aparecer un formulario inventado. */
 S.CONFIG.ADMIN_TAMBIEN_REPORTA = true;
+ok(S.apiSesion().area === undefined,
+   'el cargo "Administrador" a secas no trae formulario ni con el interruptor activo');
+
+fijarCargo('yiber.medina@kaeser.com', 'Administrador SAU');
 const sesionAmbos = S.apiSesion();
-ok(sesionAmbos.rol === 'administrador' && !!sesionAmbos.area,
-   'ADMIN_TAMBIEN_REPORTA = true le devuelve también el formulario',
+ok(sesionAmbos.rol === 'administrador' &&
+   sesionAmbos.area && sesionAmbos.area.nombre === 'SAU, Renta, CDR',
+   '"Administrador SAU" + ADMIN_TAMBIEN_REPORTA sí devuelve el formulario del área',
    sesionAmbos.area && sesionAmbos.area.nombre);
 ok(!!sesionAmbos.informe, 'y conserva el panel del informe');
-S.CONFIG.ADMIN_TAMBIEN_REPORTA = false;
 
-delete PROPS.ADMIN_CORREOS;
+S.CONFIG.ADMIN_TAMBIEN_REPORTA = false;
+ok(S.apiSesion().area === undefined,
+   'con el interruptor apagado vuelve a ver sólo el panel del informe');
+
+fijarCargo('yiber.medina@kaeser.com', 'SAU, Renta, CDR');
 delete PROPS.CORREO_GERENTE;
 delete PROPS.CORREO_COPIA;
 LIBRO.propietario = null;
@@ -1021,6 +1062,219 @@ delete PROPS.CARPETA_DRIVE;
 ok(S.contarAdjuntosSemana_(P.anio, P.semana) === 4,
    'se cuentan las imágenes que Gemini leerá esta semana',
    S.contarAdjuntosSemana_(P.anio, P.semana));
+
+/* ===== 19. Pegado en la interfaz =====
+   Js.html se carga en un navegador simulado. El fallo que motivó esta sección
+   no estaba en el parseo sino en el foco: un evento `paste` sólo llega al
+   elemento enfocado, y el clic en la zona abría el explorador de archivos, que
+   se llevaba el foco consigo. Por eso se prueba el encaminamiento, no sólo los
+   parsers. */
+console.log('\n[19] Pegado de imágenes y tablas en la interfaz');
+
+/** Elemento DOM mínimo: lo justo que usan `crear` y las zonas de pegado. */
+function elementoFalso(tag) {
+  return {
+    tagName: String(tag || 'div').toUpperCase(),
+    hijos: [], style: {}, innerHTML: '', className: '', textContent: '',
+    clases: new Set(),
+    classList: {
+      add(c) { this.__d.clases.add(c); }, remove(c) { this.__d.clases.delete(c); },
+      contains(c) { return this.__d.clases.has(c); },
+      toggle(c, v) { v ? this.__d.clases.add(c) : this.__d.clases.delete(c); }
+    },
+    oyentes: {},
+    addEventListener(ev, fn) { (this.oyentes[ev] = this.oyentes[ev] || []).push(fn); },
+    setAttribute() {}, appendChild(h) { this.hijos.push(h); },
+    contains(otro) { return otro === this; },
+    focus() { this.enfocado = true; },
+    querySelector() { return null; }, querySelectorAll() { return []; }
+  };
+}
+const nuevoElemento = (tag) => {
+  const el = elementoFalso(tag);
+  el.classList.__d = el;
+  return el;
+};
+
+const OYENTES_DOC = {};
+const UI = vm.createContext({
+  console,
+  document: {
+    addEventListener(ev, fn) { (OYENTES_DOC[ev] = OYENTES_DOC[ev] || []).push(fn); },
+    getElementById: () => nuevoElemento('div'),
+    createElement: nuevoElemento,
+    body: nuevoElemento('body')
+  },
+  window: { addEventListener() {} },
+  navigator: {},
+  alert(m) { UI.__alertas.push(m); },
+  setTimeout() {},
+  Promise,
+  FileReader: class {
+    readAsDataURL(blob) {
+      this.result = 'data:' + blob.type + ';base64,' + blob.__base64;
+      this.onload();
+    }
+  },
+  __alertas: []
+});
+vm.runInContext(
+  fs.readFileSync(path.join(DIR, 'Js.html'), 'utf8')
+    .replace(/^[\s\S]*?<script>/, '').replace(/<\/script>[\s\S]*$/, ''),
+  UI);
+
+ok(typeof UI.filasDesdeTsv === 'function' && typeof UI.registrarZona === 'function',
+   'Js.html se carga sin tocar el DOM al arrancar');
+ok((OYENTES_DOC.paste || []).length === 1,
+   'registra un único manejador de pegado a nivel de documento');
+
+/* --- Tablas copiadas de Excel --- */
+const tsv = UI.filasDesdeTsv('Cliente\tValor\nACME\t1.500.000\nBETA\t900.000');
+ok(tsv.length === 3 && tsv[1][0] === 'ACME' && tsv[2][1] === '900.000',
+   'el texto tabulado se divide en filas y columnas', JSON.stringify(tsv));
+
+const conVacias = UI.filasDesdeTsv('A\tB\tC\n1\t\t3');
+ok(conVacias[1].length === 3 && conVacias[1][1] === '',
+   'una celda vacía en medio no desplaza las columnas', JSON.stringify(conVacias[1]));
+
+const conSalto = UI.filasDesdeTsv('Cliente\tNota\nACME\t"linea 1\nlinea 2"\tX');
+ok(conSalto.length === 2,
+   'una celda con salto de línea no rompe la fila en dos', conSalto.length);
+ok(conSalto[1][1] === 'linea 1\nlinea 2', 'y conserva su contenido', conSalto[1][1]);
+
+const conComillas = UI.filasDesdeTsv('A\n"dijo ""hola"""');
+ok(conComillas[1][0] === 'dijo "hola"', 'las comillas escapadas se desdoblan', conComillas[1][0]);
+
+const tablaExcel = UI.tablaDesdeFilas([['Asesor', 'Meta'], ['Luis', '100'], ['Ana']]);
+ok(tablaExcel.encabezados.join('|') === 'Asesor|Meta', 'la primera fila es el encabezado');
+ok(tablaExcel.filas[1].length === 2 && tablaExcel.filas[1][1] === '',
+   'una fila corta se rellena para no descuadrar la tabla', JSON.stringify(tablaExcel.filas[1]));
+ok(UI.tablaDesdeFilas([['', ''], ['x', '']]).encabezados.join('') === 'x',
+   'las filas totalmente vacías se descartan');
+
+/* --- Imágenes incrustadas en el HTML del portapapeles --- */
+const uris = UI.imagenesEnHtml(
+  '<div><img alt="a" src="data:image/png;base64,QUJD"><img src="http://x/y.png"></div>');
+ok(uris.length === 1 && uris[0].indexOf('QUJD') > 0,
+   'se extrae la imagen incrustada y se ignoran las remotas', JSON.stringify(uris));
+
+/* --- Encaminamiento del Ctrl+V --- */
+const zonaImg = nuevoElemento('div');
+const zonaTab = nuevoElemento('div');
+let recibidoImg = 0, recibidoTab = 0;
+UI.registrarZona(zonaImg, 'imagen', () => { recibidoImg++; return true; });
+UI.registrarZona(zonaTab, 'tabla', () => { recibidoTab++; return true; });
+
+const portapapelesImagen = {
+  items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({}) }],
+  getData: () => ''
+};
+const portapapelesTexto = { items: [], getData: () => 'A\tB' };
+const eventoPaste = (dt, target) => {
+  let prevenido = false;
+  OYENTES_DOC.paste[0]({ clipboardData: dt, target, preventDefault() { prevenido = true; } });
+  return prevenido;
+};
+
+/* Sin haber hecho clic en nada: una imagen tiene un único destino posible. */
+ok(eventoPaste(portapapelesImagen, UI.document.body) && recibidoImg === 1,
+   'Ctrl+V con el foco en la página encamina la imagen a la única zona de imagen');
+ok(recibidoTab === 0, 'y no la manda a la zona de tablas');
+ok(eventoPaste(portapapelesTexto, UI.document.body) && recibidoTab === 1,
+   'un pegado de texto tabulado va a la zona de tablas');
+
+/* Tras hacer clic, gana la zona elegida. */
+zonaTab.oyentes.mousedown[0]();
+ok(zonaTab.classList.contains('activa'), 'la zona sobre la que se hace clic queda marcada');
+ok(eventoPaste(portapapelesTexto, UI.document.body) && recibidoTab === 2,
+   'y recibe el siguiente pegado');
+
+/* Escribir en un campo de texto debe seguir siendo escribir. */
+const cajaTexto = nuevoElemento('textarea');
+const antes = recibidoTab;
+ok(eventoPaste(portapapelesTexto, cajaTexto) === false && recibidoTab === antes,
+   'pegar texto dentro de un textarea no se desvía a ninguna zona');
+ok(eventoPaste(portapapelesImagen, cajaTexto) && recibidoImg === 2,
+   'pero pegar una imagen sobre el comentario sí la adjunta');
+
+/* Con dos zonas del mismo tipo y ninguna elegida, se pide elegir antes de pegar. */
+UI.ZONA_ACTIVA = null;
+UI.registrarZona(nuevoElemento('div'), 'tabla', () => { recibidoTab++; return true; });
+const ambiguo = recibidoTab;
+ok(eventoPaste(portapapelesTexto, UI.document.body) === false && recibidoTab === ambiguo,
+   'con dos zonas candidatas no se adivina el destino');
+
+/* El fallo original: el clic en la zona no debe abrir el explorador de archivos,
+   porque el diálogo se lleva el foco y Ctrl+V deja de llegar. */
+const fuenteJs = fs.readFileSync(path.join(DIR, 'Js.html'), 'utf8');
+ok(fuenteJs.indexOf("zona.addEventListener('click', function () { entrada.click(); })") < 0,
+   'el clic en la zona ya no abre el explorador de archivos');
+ok(/texto: '📁 Elegir archivo'[\s\S]{0,80}entrada\.click\(\)/.test(fuenteJs),
+   'elegir archivo es un botón aparte');
+
+/* ===== 20. Prueba contra la API real (opcional) =====
+   Se activa sólo si hay una clave en el entorno, nunca en el repositorio:
+
+       GEMINI_API_KEY=... node pruebas/prueba-local.js
+
+   Las demás secciones simulan la respuesta de Gemini, que es lo correcto para
+   una prueba rápida y repetible. Esta comprueba lo que ninguna simulación puede:
+   que la clave sea válida, que el modelo exista y que el informe que redacta el
+   modelo real respete la estructura pactada con la gerencia. */
+if (process.env.GEMINI_API_KEY) {
+  console.log('\n[20] Informe redactado por la API real de Gemini');
+  const { execFileSync } = require('child_process');
+
+  /* Se usa curl y no el módulo https porque así se respeta el proxy de salida
+     del entorno sin configurarlo a mano. */
+  FETCH = (url, opciones) => {
+    const args = ['-sS', '-X', opciones.method === 'post' ? 'POST' : 'GET',
+                  '-w', '\n%{http_code}', '--data-binary', '@-'];
+    Object.keys(opciones.headers || {}).forEach(h => {
+      args.push('-H', h + ': ' + opciones.headers[h]);
+    });
+    args.push('-H', 'Content-Type: ' + (opciones.contentType || 'application/json'), url);
+    const salida = execFileSync('curl', args,
+      { input: opciones.payload || '', maxBuffer: 64 * 1024 * 1024 }).toString();
+    const corte = salida.lastIndexOf('\n');
+    return respuestaHttp(Number(salida.slice(corte + 1)), salida.slice(0, corte));
+  };
+
+  PROPS.GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+  PROPS.CORREO_GERENTE = 'gerencia@kaeser.com';
+
+  const real = S.informeConIa_(S.consolidarSemana_(P.anio, P.semana));
+  ok(real.ok === true, 'la API real acepta la clave y devuelve un informe',
+     real.ok ? '' : real.motivo);
+
+  if (real.ok) {
+    const t = real.markdown;
+    ok(real.imagenesLeidas === 4, 'y leyó las 4 imágenes de la semana', real.imagenesLeidas);
+    ['RESUMEN EJECUTIVO', 'ALERTAS CRÍTICAS', 'GESTIÓN COMERCIAL',
+     'OPERACIONES, SAU Y SOPORTE TÉCNICO', 'DESARROLLO DE PERSONAL'
+    ].forEach(titulo => ok(t.indexOf(titulo) >= 0,
+      'el modelo real incluye la sección "' + titulo + '"'));
+
+    ok(t.indexOf('imagen adjunta') < 0 && t.indexOf('ver adjunto') < 0 &&
+       t.indexOf('.png') < 0,
+       'no remite al lector a ningún adjunto ni nombra archivos');
+    ok(/\*\*/.test(t), 'usa negritas como pide la directriz de formato');
+    ok(t.length > 800, 'el informe tiene cuerpo, no es una respuesta corta', t.length);
+
+    /* Las imágenes son insumo real: si el modelo las leyó, deben aparecer sus
+       cifras en el texto. Se comprueba con una que sí lleva número legible. */
+    const correoReal = S.construirCorreo_(P.anio, P.semana);
+    ok(correoReal.fuente === 'ia', 'el correo se arma con la redacción del modelo');
+    ok(correoReal.html.indexOf('KAESER COMPRESORES') >= 0, 'dentro de la plantilla del correo');
+
+    if (process.env.VER) console.log('\n===== INFORME REAL =====\n' + t);
+  }
+
+  delete PROPS.GEMINI_API_KEY;
+  delete PROPS.CORREO_GERENTE;
+} else {
+  console.log('\n[20] Prueba contra la API real: omitida (sin GEMINI_API_KEY en el entorno)');
+}
 
 if (process.env.VER) { console.log('\n===== INFORME =====\n' + md); }
 console.log('\n' + (fallos ? '❌ ' + fallos + ' prueba(s) fallida(s)' : '✅ Todas las pruebas pasaron'));

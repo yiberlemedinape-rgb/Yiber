@@ -268,7 +268,14 @@ function enviarInformeSemanal() {
     console.log(r.mensaje + ' Fuente: ' + r.fuente + '.');
   } catch (e) {
     console.error('Fallo el envío automático: ' + e.message);
+    // Mismo criterio que el permiso: los cargos de Administrador y, si aún no
+    // hay ninguno, el propietario del libro. Un fallo silencioso el viernes a
+    // las 6 de la mañana es peor que un correo de más.
     var admins = correosAdmin_();
+    if (!admins.length) {
+      var propietario = correoPropietario_();
+      if (propietario) admins = [propietario];
+    }
     if (admins.length) {
       MailApp.sendEmail(admins.join(','),
         '⚠️ Falló el envío del informe gerencial',

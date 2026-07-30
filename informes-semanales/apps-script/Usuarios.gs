@@ -36,10 +36,30 @@ function listarUsuarios_() {
       cargo: cargo,
       nombre: nombre,
       correo: correo,
-      area: areaDeCargo_(cargo)
+      area: areaDeCargo_(cargo),
+      esAdmin: esCargoAdmin_(cargo)
     });
   }
   return usuarios;
+}
+
+/**
+ * ¿Este cargo otorga el rol de Administrador?
+ *
+ * El cargo debe *empezar* por una de las palabras de CARGOS_ADMIN, y esa palabra
+ * tiene que terminar ahí. Exigir la palabra completa evita que "Administrativo"
+ * o "Auxiliar administrativo" hereden por parecido el permiso de enviarle el
+ * informe a la gerencia, y admitir un resto deja pasar "Administrador SAU".
+ */
+function esCargoAdmin_(cargo) {
+  var normal = normalizar_(cargo);
+  for (var i = 0; i < CARGOS_ADMIN.length; i++) {
+    var palabra = CARGOS_ADMIN[i];
+    if (normal === palabra) return true;
+    if (normal.indexOf(palabra) === 0 &&
+        /[^a-z0-9]/.test(normal.charAt(palabra.length))) return true;
+  }
+  return false;
 }
 
 /**
@@ -49,6 +69,15 @@ function listarUsuarios_() {
 function areaDeCargo_(cargo) {
   var normal = normalizar_(cargo);
   if (!normal) return null;
+
+  // "Administrador" no es un área: quien lo tiene consolida lo que reportan las
+  // demás. Si el cargo además nombra un área ("Administrador SAU"), se resuelve
+  // por el resto, para que esa persona pueda seguir entregando su propio
+  // reporte cuando CONFIG.ADMIN_TAMBIEN_REPORTA está activo.
+  if (esCargoAdmin_(normal)) {
+    normal = normal.replace(/^[a-z]+[\s\/,;.:·-]*/, '').trim();
+    if (!normal) return null;
+  }
 
   // 1) Coincidencia directa con el nombre del área.
   for (var area in ESQUEMA) {
@@ -94,7 +123,9 @@ function usuarioActual_() {
   for (var i = 0; i < usuarios.length; i++) {
     if (usuarios[i].correo === correo) {
       var u = usuarios[i];
-      if (!u.area) {
+      // El Administrador entra sin área: su cargo no es un área que reporte,
+      // sino el permiso para consolidar y enviar lo que reportan las demás.
+      if (!u.area && !u.esAdmin) {
         return {
           ok: false,
           motivo: 'Tu cargo ("' + u.cargo + '") no está asociado a ningún ' +
@@ -113,13 +144,11 @@ function usuarioActual_() {
   };
 }
 
-/** Lista de correos administradores (propiedad ADMIN_CORREOS, separados por coma). */
+/** Correos cuyo cargo en la hoja "Usuario" es de Administrador. */
 function correosAdmin_() {
-  var crudo = PropertiesService.getScriptProperties()
-    .getProperty(CONFIG.PROP_ADMINS) || '';
-  return crudo.split(/[,;\s]+/)
-    .map(function (c) { return c.trim().toLowerCase(); })
-    .filter(function (c) { return c.length > 0; });
+  return listarUsuarios_()
+    .filter(function (u) { return u.esAdmin; })
+    .map(function (u) { return u.correo; });
 }
 
 /** Correo del propietario del libro (cadena vacía si Google no lo expone). */
@@ -135,13 +164,15 @@ function correoPropietario_() {
 /**
  * ¿Quien está ejecutando es el Administrador?
  *
- * El informe gerencial sólo puede dispararse a mano desde el menú de Google
- * Sheets, y sólo por un administrador. La interfaz web no expone esta acción
- * en absoluto (ver Code.gs: no existe ningún endpoint que la ejecute).
+ * El rol sale de la columna "Cargo" de la hoja "Usuario" y de ningún otro lado:
+ * escribir "Administrador" en la fila de alguien le da el permiso, y cambiarle
+ * el cargo a un área se lo quita y le devuelve su formulario. No hay listas de
+ * correos paralelas que mantener ni que puedan contradecir a la hoja.
  *
- * Administrador = correo listado en ADMIN_CORREOS. Si esa propiedad todavía no
- * se ha configurado, se acepta únicamente al propietario del libro, para no
- * dejar el sistema sin nadie que pueda operarlo el primer día.
+ * Única excepción: mientras NADIE tenga ese cargo, se acepta al propietario del
+ * libro. Es un seguro contra el bloqueo del primer día —si el permiso sólo
+ * viviera en la hoja, un libro recién creado no tendría a nadie que pudiera
+ * operarlo—, y deja de aplicar en cuanto se escribe el primer Administrador.
  */
 function esAdministrador_() {
   var correo = correoSesion_();
@@ -158,7 +189,8 @@ function esAdministrador_() {
 function exigirAdministrador_() {
   if (esAdministrador_()) return;
   throw new Error(
-    'Sólo el Administrador puede ejecutar esta acción. Agrega tu correo a la ' +
-    'propiedad de script "' + CONFIG.PROP_ADMINS + '" ' +
-    '(Configuración del proyecto → Propiedades del script).');
+    'Sólo el Administrador puede ejecutar esta acción. El permiso se otorga en ' +
+    'la hoja "' + CONFIG.HOJA_USUARIOS + '": escribe "' + CONFIG.CARGO_ADMIN +
+    '" en la columna Cargo de la fila correspondiente al correo ' +
+    (correoSesion_() || 'de esa persona') + '.');
 }

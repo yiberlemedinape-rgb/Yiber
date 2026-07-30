@@ -301,6 +301,108 @@ function agregarFila(tbody, campo, valores) {
   return tr;
 }
 
+/* ===================== Pegado con Ctrl+V ===================== */
+
+/**
+ * Un evento `paste` sólo llega al elemento que tiene el foco. Antes, hacer clic
+ * en el recuadro abría de inmediato el explorador de archivos y el foco se iba
+ * con él, así que Ctrl+V nunca aterrizaba en la zona: pegar "no funcionaba".
+ *
+ * Ahora el clic sólo enfoca —abrir el explorador es un botón aparte— y además se
+ * escucha el pegado a nivel de documento para encaminarlo a la zona activa, de
+ * modo que Ctrl+V también sirva cuando el foco está en el cuerpo de la página
+ * (que es justo lo que ocurre al abrir el formulario recién cargado).
+ */
+var ZONAS_PEGADO = [];
+var ZONA_ACTIVA = null;
+
+/** Marca una zona como destino del próximo Ctrl+V y la resalta. */
+function activarZona(destino) {
+  ZONA_ACTIVA = destino;
+  ZONAS_PEGADO.forEach(function (d) {
+    if (d.zona.classList) d.zona.classList.toggle('activa', d === destino);
+  });
+}
+
+/**
+ * Registra un recuadro que puede recibir un pegado.
+ * `recibir(dataTransfer)` devuelve true si consumió el contenido.
+ */
+function registrarZona(zona, tipo, recibir) {
+  var destino = { zona: zona, tipo: tipo, recibir: recibir };
+  ZONAS_PEGADO.push(destino);
+
+  zona.addEventListener('mousedown', function () { activarZona(destino); });
+  zona.addEventListener('focus', function () { activarZona(destino); });
+  zona.addEventListener('click', function () { zona.focus(); activarZona(destino); });
+  zona.addEventListener('paste', function (e) {
+    activarZona(destino);
+    if (recibir(e.clipboardData || window.clipboardData)) e.preventDefault();
+  });
+  return destino;
+}
+
+/** ¿El portapapeles trae un archivo de imagen? */
+function portapapelesConImagen(dt) {
+  var items = (dt && dt.items) || [];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].kind === 'file' && String(items[i].type).indexOf('image/') === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Zona a la que va un Ctrl+V que no cayó dentro de ningún recuadro.
+ *
+ * Se exige que el tipo coincida: un recorte de pantalla no tiene sentido en un
+ * campo de tabla ni un rango de Excel en uno de imagen. Si el usuario no ha
+ * elegido recuadro y hay más de uno posible, no se adivina.
+ */
+function destinoDePegado(tipo) {
+  if (ZONA_ACTIVA && ZONA_ACTIVA.tipo === tipo) return ZONA_ACTIVA;
+  var candidatas = ZONAS_PEGADO.filter(function (d) { return d.tipo === tipo; });
+  return candidatas.length === 1 ? candidatas[0] : null;
+}
+
+document.addEventListener('paste', function (e) {
+  var dt = e.clipboardData || window.clipboardData;
+  if (!dt || !ZONAS_PEGADO.length) return;
+
+  // Si cayó dentro de una zona, su propio manejador ya lo atendió.
+  var dentro = ZONAS_PEGADO.some(function (d) { return d.zona.contains(e.target); });
+  if (dentro) return;
+
+  // En una caja de texto, pegar texto debe seguir siendo pegar texto; sólo se
+  // desvía cuando lo que hay en el portapapeles es una imagen.
+  var hayImagen = portapapelesConImagen(dt);
+  var destinoEditable = e.target && (e.target.tagName === 'INPUT' ||
+    e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+  if (destinoEditable && !hayImagen) return;
+
+  var destino = destinoDePegado(hayImagen ? 'imagen' : 'tabla');
+  if (!destino) {
+    mostrarAviso('mensajeFormulario',
+      'Haz clic primero en el recuadro donde quieres pegar y vuelve a intentarlo.', 'alerta');
+    return;
+  }
+  if (destino.recibir(dt)) e.preventDefault();
+});
+
+/**
+ * Respaldo de los botones "Pegar": el marco en el que Apps Script sirve la
+ * interfaz no siempre concede permiso para leer el portapapeles por código, y
+ * en ese caso lo honesto es dejar la zona enfocada y pedir el atajo, que nunca
+ * depende de permisos.
+ */
+function pedirCtrlV(zona, aviso) {
+  zona.focus();
+  zona.classList.add('esperando');
+  mostrarAviso('mensajeFormulario', aviso ||
+    'Tu navegador no permite leer el portapapeles desde aquí. El recuadro ya ' +
+    'quedó seleccionado: presiona Ctrl+V (⌘+V en Mac) para pegar.', 'alerta');
+  setTimeout(function () { zona.classList.remove('esperando'); }, 5000);
+}
+
 /* ===================== Campos de imagen ===================== */
 
 /** Estado en memoria de los adjuntos, por clave de campo. */
@@ -321,9 +423,10 @@ function construirImagen(campo, guardados) {
   var cont = crear('div');
   var zona = crear('div', {
     clase: 'zona-adjunto', tabindex: '0',
-    html: '<b>Pega una imagen con Ctrl+V</b>, arrástrala aquí o ' +
-          '<span class="enlace-falso">elige un archivo</span>' +
-          '<div class="pista">PNG, JPG o WEBP · máximo ' + MAX_MB_ADJUNTO + ' MB</div>'
+    html: '<b>Haz clic aquí y pega con Ctrl+V</b>, o arrastra la imagen sobre ' +
+          'este recuadro' +
+          '<div class="pista">Recorte de pantalla, gráfica de Excel o archivo · ' +
+          'PNG, JPG o WEBP · máximo ' + MAX_MB_ADJUNTO + ' MB</div>'
   });
 
   var entrada = crear('input', { type: 'file', accept: 'image/*', multiple: 'multiple' });
@@ -331,17 +434,8 @@ function construirImagen(campo, guardados) {
 
   var lista = crear('div', { clase: 'lista-adjuntos' });
 
-  // Pegado: el navegador entrega la imagen del portapapeles como File.
-  zona.addEventListener('paste', function (e) {
-    var items = (e.clipboardData || window.clipboardData).items || [];
-    var encontrada = false;
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].kind === 'file' && items[i].type.indexOf('image/') === 0) {
-        agregarImagen(campo, items[i].getAsFile(), lista);
-        encontrada = true;
-      }
-    }
-    if (encontrada) e.preventDefault();
+  registrarZona(zona, 'imagen', function (dt) {
+    return recibirImagenes(campo, lista, dt) > 0;
   });
 
   // Arrastrar y soltar.
@@ -360,13 +454,23 @@ function construirImagen(campo, guardados) {
     for (var i = 0; i < archivos.length; i++) agregarImagen(campo, archivos[i], lista);
   });
 
-  zona.addEventListener('click', function () { entrada.click(); });
   entrada.addEventListener('change', function () {
     for (var i = 0; i < entrada.files.length; i++) agregarImagen(campo, entrada.files[i], lista);
     entrada.value = '';
   });
 
+  var barra = crear('div', { clase: 'barra-adjunto' });
+  barra.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '📋 Pegar imagen',
+    onclick: function () { pegarImagenDelPortapapeles(campo, zona, lista); }
+  }));
+  barra.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '📁 Elegir archivo',
+    onclick: function () { entrada.click(); }
+  }));
+
   cont.appendChild(zona);
+  cont.appendChild(barra);
   cont.appendChild(entrada);
   cont.appendChild(lista);
 
@@ -415,6 +519,109 @@ function agregarImagen(campo, archivo, lista) {
     pintarAdjuntos(campo, lista);
   };
   lector.readAsDataURL(archivo);
+}
+
+/**
+ * Extrae del portapapeles todas las imágenes que traiga y las agrega al campo.
+ * Devuelve cuántas encontró.
+ *
+ * Se intentan tres rutas, de la más fiel a la más rebuscada: el archivo binario
+ * (recorte de pantalla, gráfica copiada de Excel), la lista de archivos del
+ * arrastre, y por último una imagen incrustada como `data:` dentro del HTML del
+ * portapapeles, que es como llegan las imágenes copiadas desde una página o un
+ * documento de Google.
+ */
+function recibirImagenes(campo, lista, dt) {
+  var encontradas = 0;
+
+  var items = dt.items || [];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].kind === 'file' && String(items[i].type).indexOf('image/') === 0) {
+      agregarImagen(campo, items[i].getAsFile(), lista);
+      encontradas++;
+    }
+  }
+
+  if (!encontradas && dt.files) {
+    for (var j = 0; j < dt.files.length; j++) {
+      if (String(dt.files[j].type).indexOf('image/') === 0) {
+        agregarImagen(campo, dt.files[j], lista);
+        encontradas++;
+      }
+    }
+  }
+
+  if (!encontradas && dt.getData) {
+    imagenesEnHtml(dt.getData('text/html')).forEach(function (uri) {
+      if (agregarImagenDataUri(campo, uri, lista)) encontradas++;
+    });
+  }
+
+  return encontradas;
+}
+
+/** Devuelve las imágenes incrustadas como data: URI dentro de un fragmento HTML. */
+function imagenesEnHtml(html) {
+  var salida = [];
+  var re = /<img[^>]+src\s*=\s*["'](data:image\/[a-z0-9.+-]+;base64,[^"']+)["']/gi;
+  var m;
+  while ((m = re.exec(String(html || '')))) salida.push(m[1]);
+  return salida;
+}
+
+/** Agrega una imagen que ya viene en base64 dentro de un data: URI. */
+function agregarImagenDataUri(campo, uri, lista) {
+  var partes = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(String(uri));
+  if (!partes) return false;
+
+  var base64 = partes[2];
+  var bytes = Math.floor(base64.length * 3 / 4);
+  if (bytes > MAX_MB_ADJUNTO * 1024 * 1024) {
+    alert('La imagen pegada pesa ' + (bytes / 1048576).toFixed(1) +
+          ' MB y el máximo es ' + MAX_MB_ADJUNTO + ' MB.');
+    return false;
+  }
+
+  ADJUNTOS[campo.clave].push({
+    nombre: 'imagen-pegada.' + (partes[1].split('/')[1] || 'png'),
+    mime: partes[1],
+    base64: base64,
+    vistaPrevia: uri
+  });
+  SUCIO = true;
+  pintarAdjuntos(campo, lista);
+  return true;
+}
+
+/**
+ * Botón "Pegar imagen". Intenta leer el portapapeles por código y, si el
+ * navegador no lo permite dentro del marco de Apps Script, cae al atajo.
+ */
+function pegarImagenDelPortapapeles(campo, zona, lista) {
+  if (!navigator.clipboard || !navigator.clipboard.read) { pedirCtrlV(zona); return; }
+
+  navigator.clipboard.read().then(function (elementos) {
+    var pendientes = [];
+    (elementos || []).forEach(function (elemento) {
+      elemento.types.forEach(function (tipo) {
+        if (tipo.indexOf('image/') !== 0) return;
+        pendientes.push(elemento.getType(tipo).then(function (blob) {
+          agregarImagen(campo, new File([blob], 'portapapeles.' +
+            (tipo.split('/')[1] || 'png'), { type: tipo }), lista);
+        }));
+      });
+    });
+
+    if (!pendientes.length) {
+      mostrarAviso('mensajeFormulario',
+        'No hay ninguna imagen en el portapapeles. Copia el recorte y vuelve a ' +
+        'pulsar "Pegar imagen".', 'alerta');
+      return;
+    }
+    Promise.all(pendientes).then(function () {
+      mostrarAviso('mensajeFormulario', '', '');
+    });
+  }).catch(function () { pedirCtrlV(zona); });
 }
 
 /** Dibuja las miniaturas y los enlaces de lo ya adjuntado. */
@@ -478,25 +685,28 @@ function construirTablaLibre(campo, guardada) {
   var cont = crear('div');
   var zona = crear('div', {
     clase: 'zona-adjunto', tabindex: '0',
-    html: '<b>Pega aquí el rango copiado de Excel (Ctrl+V)</b>' +
+    html: '<b>Haz clic aquí y pega el rango copiado de Excel (Ctrl+V)</b>' +
           '<div class="pista">Se conservan los encabezados y las columnas ' +
           'originales. La primera fila se toma como encabezado.</div>'
   });
 
   var vista = crear('div', { clase: 'tabla-envoltura' });
 
-  zona.addEventListener('paste', function (e) {
-    var texto = (e.clipboardData || window.clipboardData).getData('text/plain');
-    if (!texto) return;
-    e.preventDefault();
-    TABLAS_LIBRES[campo.clave] = parsearPegadoExcel(texto);
+  registrarZona(zona, 'tabla', function (dt) {
+    var datos = tablaDelPortapapeles(dt);
+    if (!datos) return false;
+    TABLAS_LIBRES[campo.clave] = datos;
     SUCIO = true;
     pintarTablaLibre(campo, vista);
+    return true;
   });
 
-  cont.appendChild(zona);
-  cont.appendChild(vista);
-  cont.appendChild(crear('button', {
+  var barra = crear('div', { clase: 'barra-adjunto' });
+  barra.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '📋 Pegar tabla',
+    onclick: function () { pegarTablaDelPortapapeles(campo, zona, vista); }
+  }));
+  barra.appendChild(crear('button', {
     clase: 'agregar', type: 'button', texto: 'Vaciar tabla',
     onclick: function () {
       TABLAS_LIBRES[campo.clave] = { encabezados: [], filas: [] };
@@ -505,20 +715,123 @@ function construirTablaLibre(campo, guardada) {
     }
   }));
 
+  cont.appendChild(zona);
+  cont.appendChild(barra);
+  cont.appendChild(vista);
+
   pintarTablaLibre(campo, vista);
   return cont;
 }
 
-/** Convierte el TSV del portapapeles en { encabezados, filas }. */
-function parsearPegadoExcel(texto) {
-  var lineas = String(texto).replace(/\r\n/g, '\n').split('\n')
-    .filter(function (l) { return l.trim().length > 0; });
-  if (!lineas.length) return { encabezados: [], filas: [] };
+/**
+ * Saca la tabla del portapapeles. Se prefiere el HTML —Excel copia la selección
+ * como un `<table>` real— porque conserva las celdas vacías, las combinadas y
+ * los valores con saltos de línea; el texto tabulado es el respaldo.
+ * Devuelve null si el portapapeles no traía nada aprovechable.
+ */
+function tablaDelPortapapeles(dt) {
+  if (!dt || !dt.getData) return null;
 
-  var corta = function (l) {
-    return l.split('\t').map(function (c) { return c.trim(); });
+  var filas = filasDesdeHtml(dt.getData('text/html'));
+  if (!filas || !filas.length) filas = filasDesdeTsv(dt.getData('text/plain'));
+  return filas && filas.length ? tablaDesdeFilas(filas) : null;
+}
+
+/** Convierte una matriz de celdas en { encabezados, filas }, cuadrando el ancho. */
+function tablaDesdeFilas(filas) {
+  var utiles = filas.filter(function (f) {
+    return f.some(function (c) { return String(c).trim().length > 0; });
+  });
+  if (!utiles.length) return { encabezados: [], filas: [] };
+
+  var ancho = utiles.reduce(function (max, f) { return Math.max(max, f.length); }, 0);
+  var cuadrar = function (f) {
+    var salida = [];
+    for (var i = 0; i < ancho; i++) salida.push(String(f[i] === undefined ? '' : f[i]).trim());
+    return salida;
   };
-  return { encabezados: corta(lineas[0]), filas: lineas.slice(1).map(corta) };
+  return { encabezados: cuadrar(utiles[0]), filas: utiles.slice(1).map(cuadrar) };
+}
+
+/** Filas de la primera <table> de un fragmento HTML del portapapeles. */
+function filasDesdeHtml(html) {
+  if (!String(html || '').match(/<t(able|r)\b/i)) return null;
+  var doc;
+  try {
+    doc = new DOMParser().parseFromString(String(html), 'text/html');
+  } catch (e) {
+    return null;
+  }
+  var tabla = doc.querySelector('table');
+  if (!tabla) return null;
+
+  var filas = [];
+  Array.prototype.forEach.call(tabla.querySelectorAll('tr'), function (tr) {
+    var celdas = tr.querySelectorAll('th, td');
+    if (!celdas.length) return;
+    var fila = [];
+    Array.prototype.forEach.call(celdas, function (celda) {
+      fila.push(String(celda.textContent || '').replace(/\s+/g, ' ').trim());
+      // Una celda combinada ocupa varias columnas: se rellenan para que los
+      // encabezados sigan alineados con sus datos.
+      var ancho = Number(celda.getAttribute('colspan') || 1);
+      for (var i = 1; i < ancho; i++) fila.push('');
+    });
+    filas.push(fila);
+  });
+  return filas.length ? filas : null;
+}
+
+/**
+ * Divide el texto tabulado del portapapeles en celdas.
+ *
+ * No basta con partir por tabuladores y saltos de línea: cuando una celda de
+ * Excel contiene un salto de línea, Excel la entrega entre comillas, y partir a
+ * ciegas rompería la fila en dos.
+ */
+function filasDesdeTsv(texto) {
+  var s = String(texto || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!s) return [];
+
+  var filas = [], fila = [], celda = '', entreComillas = false;
+
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (entreComillas) {
+      if (c !== '"') { celda += c; }
+      else if (s.charAt(i + 1) === '"') { celda += '"'; i++; }   // comilla escapada
+      else { entreComillas = false; }
+      continue;
+    }
+    if (c === '"' && celda === '') entreComillas = true;
+    else if (c === '\t') { fila.push(celda); celda = ''; }
+    else if (c === '\n') { fila.push(celda); filas.push(fila); fila = []; celda = ''; }
+    else celda += c;
+  }
+  if (celda !== '' || fila.length) { fila.push(celda); filas.push(fila); }
+
+  return filas;
+}
+
+/** Botón "Pegar tabla", con el mismo respaldo al atajo que el de imágenes. */
+function pegarTablaDelPortapapeles(campo, zona, vista) {
+  var aplicar = function (filas) {
+    if (!filas || !filas.length) {
+      mostrarAviso('mensajeFormulario',
+        'El portapapeles no tiene una tabla. Copia el rango en Excel y vuelve a ' +
+        'pulsar "Pegar tabla".', 'alerta');
+      return;
+    }
+    TABLAS_LIBRES[campo.clave] = tablaDesdeFilas(filas);
+    SUCIO = true;
+    pintarTablaLibre(campo, vista);
+    mostrarAviso('mensajeFormulario', '', '');
+  };
+
+  if (!navigator.clipboard || !navigator.clipboard.readText) { pedirCtrlV(zona); return; }
+  navigator.clipboard.readText()
+    .then(function (texto) { aplicar(filasDesdeTsv(texto)); })
+    .catch(function () { pedirCtrlV(zona); });
 }
 
 /** Muestra la tabla pegada, en modo sólo lectura. */

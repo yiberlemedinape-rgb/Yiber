@@ -43,9 +43,18 @@ var CONFIG = {
   /** Propiedades de script (Configuración → Propiedades del script). */
   PROP_CORREO_GERENTE: 'CORREO_GERENTE',
   PROP_COPIA_INFORME: 'CORREO_COPIA',
-  PROP_ADMINS: 'ADMIN_CORREOS',
   PROP_API_KEY: 'GEMINI_API_KEY',
   PROP_MODELO: 'MODELO_IA',
+
+  /**
+   * Cargo que otorga el rol de Administrador.
+   *
+   * El rol se decide por la columna "Cargo" de la hoja "Usuario" y por nada más:
+   * cambiar ahí el cargo de alguien le da o le quita el permiso de inmediato, sin
+   * tocar código ni propiedades de script. Es el mismo sitio donde ya se decide
+   * qué formulario ve cada persona, así que hay un solo lugar que mantener.
+   */
+  CARGO_ADMIN: 'Administrador',
 
   /**
    * Modelo usado para redactar el informe gerencial cuando hay API key.
@@ -93,9 +102,12 @@ var CONFIG = {
    *
    * false (por defecto): sólo el panel del informe gerencial — vista previa del
    *   correo y botón de envío. No se le muestra ningún formulario.
-   * true: además de ese panel, se le muestra el formulario de su área, si está
-   *   registrado en la hoja "Usuario". Útil cuando la persona que administra
-   *   también debe entregar su propio reporte semanal.
+   * true: además de ese panel, se le muestra el formulario de su área.
+   *
+   * El cargo "Administrador" a secas no corresponde a ninguna área, así que esta
+   * opción sólo cambia algo cuando el cargo nombra las dos cosas —por ejemplo
+   * "Administrador SAU"—, que es como se registra a quien administra el sistema
+   * y además debe entregar su propio reporte semanal.
    */
   ADMIN_TAMBIEN_REPORTA: false,
 
@@ -217,6 +229,14 @@ var ALIAS_CARGOS = {
   'asesores can': 'Asesores KAM',
   'can': 'Asesores KAM'
 };
+
+/**
+ * Cargos que otorgan el rol de Administrador, ya normalizados (sin tildes, en
+ * minúscula). Se comparan contra la primera palabra del cargo, de modo que
+ * "Administrador", "Admin" y "Administrador de sistemas" cuentan, pero
+ * "Director Administrativo" no: el permiso no debe caer por parecido de texto.
+ */
+var CARGOS_ADMIN = ['administrador', 'administradora', 'admin', 'administrator'];
 
 /**
  * ESQUEMA: definición completa de cada formulario.
