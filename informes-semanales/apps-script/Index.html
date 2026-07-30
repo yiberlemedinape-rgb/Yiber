@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Estilos'); ?>
+</head>
+<body>
+
+  <header class="barra">
+    <div class="marca">
+      KAESER COMPRESORES
+      <span>Informes Semanales · base de datos corporativa</span>
+    </div>
+    <div class="usuario" id="chipUsuario">
+      <b id="chipNombre">Identificando…</b>
+      <span id="chipCargo"></span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Estado de carga / errores de acceso -->
+    <div id="cargando" class="tarjeta cargando">Cargando tu formulario…</div>
+    <div id="bloqueo" class="aviso error oculto"></div>
+
+    <!--
+      Aplicación. La interfaz sirve una de dos vistas según el rol que devuelve
+      apiSesion():
+
+        · colaborador   → sólo el formulario de su área.
+        · administrador → sólo el panel del informe gerencial (vista previa del
+                          correo + envío). El formulario se le muestra además
+                          únicamente si CONFIG.ADMIN_TAMBIEN_REPORTA está en true.
+
+      Mostrar u ocultar el panel es cosmético: el permiso real lo aplica el
+      servidor con exigirAdministrador_() (ver la nota en Code.gs).
+      El horario del envío automático se configura en CONFIG.ENVIO_* .
+    -->
+    <div id="app" class="oculto">
+
+      <!-- ============ Panel del Administrador ============ -->
+      <section id="panelAdmin" class="oculto">
+        <div class="tarjeta">
+          <h2>📈 Informe gerencial semanal</h2>
+          <p class="sub">
+            Consolida las siete áreas y arma el correo que recibe la gerencia
+            los <b>viernes a las 6:00 a. m.</b> La vista previa muestra el
+            mensaje exactamente como llegará.
+          </p>
+
+          <div class="periodo" style="margin-top:14px">
+            <div>
+              <label style="display:block;font-size:11px;text-transform:uppercase;
+                            letter-spacing:.5px;color:var(--tenue);margin-bottom:4px">
+                Semana del informe
+              </label>
+              <select class="semana" id="periodoInforme" onchange="limpiarVistaPrevia()"></select>
+            </div>
+            <button class="secundario" id="btnPrevisualizar" onclick="previsualizarCorreo()">
+              Ver vista previa
+            </button>
+            <button class="primario" id="btnEnviar" onclick="enviarInformeGerencial()">
+              Enviar al gerente
+            </button>
+          </div>
+
+          <div class="destinatario" id="destinatario"></div>
+        </div>
+
+        <div id="mensajeInforme" class="aviso oculto"></div>
+
+        <div id="vistaPrevia" class="oculto">
+          <div class="sobre-cabecera" id="sobreCabecera"></div>
+          <div class="sobre-cuerpo" id="sobreCuerpo"></div>
+        </div>
+      </section>
+
+      <!-- ============ Formulario del colaborador ============ -->
+      <section id="panelFormulario" class="oculto">
+        <div class="tarjeta">
+          <h2 id="tituloArea">Área</h2>
+          <p class="sub" id="descripcionArea"></p>
+
+          <div class="periodo" style="margin-top:14px">
+            <div class="dato">
+              <label>Año</label>
+              <b id="verAnio">—</b>
+            </div>
+            <div class="dato">
+              <label>N° de Semana</label>
+              <b id="verSemana">—</b>
+            </div>
+            <div class="dato crece">
+              <label>Nombre del colaborador</label>
+              <b id="verNombre">—</b>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;text-transform:uppercase;
+                            letter-spacing:.5px;color:var(--tenue);margin-bottom:4px">
+                Periodo a reportar
+              </label>
+              <select class="semana" id="selectorPeriodo" onchange="cambiarPeriodo()"></select>
+            </div>
+          </div>
+        </div>
+
+        <div id="mensajeFormulario" class="aviso oculto"></div>
+
+        <div class="tarjeta">
+          <div id="campos"></div>
+
+          <div class="acciones-pie">
+            <button class="primario" id="btnGuardar" onclick="guardar()">Guardar reporte</button>
+            <button class="secundario" onclick="recargarRegistro()">Descartar cambios</button>
+            <span id="estadoGuardado" class="cargando"></span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <?!= include('Js'); ?>
+</body>
+</html>

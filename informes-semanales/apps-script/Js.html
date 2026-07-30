@@ -1,0 +1,1042 @@
+<script>
+/**
+ * Js.html
+ * ---------------------------------------------------------------------------
+ * Lógica de la interfaz web. El servidor manda el ESQUEMA del área del usuario
+ * y aquí se dibuja el formulario: los campos "Campo Simple" se vuelven áreas de
+ * texto y los campos "Tabla" se vuelven filas dinámicas que el usuario agrega.
+ *
+ * Nada del estado de acceso vive aquí: el servidor vuelve a validar al usuario
+ * en cada llamada (`apiSesion`, `apiCargarRegistro`, `apiGuardar`), y el nombre
+ * con el que se guarda sale de la hoja "Usuario", no del cliente.
+ * ---------------------------------------------------------------------------
+ */
+
+var SESION = null;      // respuesta de apiSesion()
+var CAMPOS = [];        // definición de campos del área
+var SUCIO = false;      // ¿hay cambios sin guardar?
+
+/* ===================== Utilidades de DOM ===================== */
+
+function $(id) { return document.getElementById(id); }
+
+function crear(tag, props, hijos) {
+  var el = document.createElement(tag);
+  if (props) {
+    for (var k in props) {
+      if (k === 'clase') el.className = props[k];
+      else if (k === 'texto') el.textContent = props[k];
+      else if (k === 'html') el.innerHTML = props[k];
+      else if (k.indexOf('on') === 0) el.addEventListener(k.slice(2), props[k]);
+      else el.setAttribute(k, props[k]);
+    }
+  }
+  (hijos || []).forEach(function (h) { if (h) el.appendChild(h); });
+  return el;
+}
+
+function mostrarAviso(idElemento, texto, tipo) {
+  var el = $(idElemento);
+  if (!texto) { el.className = 'aviso oculto'; el.textContent = ''; return; }
+  el.className = 'aviso ' + (tipo || 'info');
+  el.textContent = texto;
+}
+
+/* ===================== Arranque ===================== */
+
+window.addEventListener('load', function () {
+  google.script.run
+    .withSuccessHandler(iniciar)
+    .withFailureHandler(function (e) { bloquear(e.message); })
+    .apiSesion();
+});
+
+function bloquear(motivo) {
+  $('cargando').classList.add('oculto');
+  $('bloqueo').classList.remove('oculto');
+  $('bloqueo').textContent = motivo;
+  $('chipNombre').textContent = 'Sin acceso';
+}
+
+function iniciar(sesion) {
+  if (!sesion || !sesion.ok) { bloquear(sesion ? sesion.motivo : 'Respuesta vacía del servidor.'); return; }
+
+  // Un administrador puede no tener área (no está en la hoja "Usuario"), así que
+  // CAMPOS se llena más abajo, sólo cuando el servidor entrega un formulario.
+  SESION = sesion;
+  CAMPOS = [];
+
+  $('cargando').classList.add('oculto');
+  $('app').classList.remove('oculto');
+
+  $('chipNombre').textContent = sesion.usuario.nombre;
+  $('chipCargo').textContent =
+    (sesion.usuario.cargo ? sesion.usuario.cargo + ' · ' : '') + sesion.usuario.correo;
+
+  // Panel del administrador: vista previa del correo y envío.
+  if (sesion.rol === 'administrador') {
+    $('panelAdmin').classList.remove('oculto');
+    llenarPeriodos($('periodoInforme'), sesion.periodosEditables);
+    pintarDestinatario(sesion.informe);
+  }
+
+  // Formulario: siempre para el colaborador; para el administrador sólo si el
+  // servidor lo autorizó (CONFIG.ADMIN_TAMBIEN_REPORTA).
+  if (sesion.area) {
+    CAMPOS = sesion.area.campos;
+    $('panelFormulario').classList.remove('oculto');
+    $('tituloArea').textContent = sesion.area.icono + '  ' + sesion.area.nombre;
+    $('descripcionArea').textContent = sesion.area.descripcion || '';
+    $('verNombre').textContent = sesion.usuario.nombre;
+    llenarPeriodos($('selectorPeriodo'), sesion.periodosEditables);
+    pintarPeriodo(sesion.periodo.anio, sesion.periodo.semana);
+    pintarFormulario(sesion.registro);
+  }
+
+  window.addEventListener('beforeunload', function (e) {
+    if (!SUCIO) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+}
+
+/** Muestra a quién irá el correo y avisa si falta configurarlo. */
+function pintarDestinatario(informe) {
+  var cont = $('destinatario');
+  cont.innerHTML = '';
+
+  if (!informe.destinatario) {
+    cont.appendChild(crear('div', {
+      clase: 'falta',
+      texto: '⚠️ Falta configurar la propiedad de script CORREO_GERENTE. ' +
+             'El envío fallará hasta que se registre el correo del gerente.'
+    }));
+    $('btnEnviar').disabled = true;
+    return;
+  }
+
+  cont.appendChild(crear('div', { html: 'Se enviará a <b>' + informe.destinatario + '</b>' +
+    (informe.copia ? ', con copia a <b>' + informe.copia + '</b>' : '') + '.' }));
+  cont.appendChild(crear('div', {
+    texto: informe.iaActiva
+      ? 'Redacción asistida por Gemini activa.'
+      : 'Redacción asistida inactiva: se enviará el informe automático.'
+  }));
+}
+
+function llenarPeriodos(select, periodos) {
+  select.innerHTML = '';
+  periodos.forEach(function (p) {
+    select.appendChild(crear('option', { value: p.anio + '-' + p.semana, texto: p.etiqueta }));
+  });
+}
+
+function periodoSeleccionado(select) {
+  var partes = select.value.split('-');
+  return { anio: Number(partes[0]), semana: Number(partes[1]) };
+}
+
+function pintarPeriodo(anio, semana) {
+  $('verAnio').textContent = anio;
+  $('verSemana').textContent = semana;
+}
+
+/* ===================== Formulario ===================== */
+
+function pintarFormulario(registro) {
+  var contenedor = $('campos');
+  contenedor.innerHTML = '';
+  var valores = (registro && registro.campos) ? registro.campos : {};
+
+  CAMPOS.forEach(function (campo) {
+    var bloque = crear('div', { clase: 'campo', 'data-clave': campo.clave });
+    bloque.appendChild(crear('label', { clase: 'titulo', texto: campo.titulo }));
+    if (campo.ayuda) bloque.appendChild(crear('div', { clase: 'ayuda', texto: campo.ayuda }));
+
+    if (campo.tipo === 'tabla') {
+      bloque.appendChild(construirTabla(campo, valores[campo.clave] || []));
+    } else if (campo.tipo === 'imagen') {
+      bloque.appendChild(construirImagen(campo, valores[campo.clave] || []));
+    } else if (campo.tipo === 'tablaLibre') {
+      bloque.appendChild(construirTablaLibre(campo, valores[campo.clave] || null));
+    } else {
+      bloque.appendChild(construirTexto(campo, valores[campo.clave] || ''));
+    }
+    contenedor.appendChild(bloque);
+  });
+
+  SUCIO = false;
+  $('estadoGuardado').textContent = registro
+    ? 'Ya reportaste esta semana. Puedes corregir y volver a guardar.'
+    : 'Aún no has reportado esta semana.';
+}
+
+function construirTexto(campo, valor) {
+  var lineas = campo.lineas || 3;
+  if (lineas <= 1) {
+    return crear('input', {
+      type: 'text', value: valor, 'data-campo': campo.clave,
+      oninput: function () { SUCIO = true; }
+    });
+  }
+  var ta = crear('textarea', {
+    rows: lineas, 'data-campo': campo.clave,
+    oninput: function () { SUCIO = true; }
+  });
+  ta.value = valor;
+  return ta;
+}
+
+function construirTabla(campo, filas) {
+  var envoltura = crear('div', { clase: 'tabla-envoltura' });
+  var tabla = crear('table', { clase: 'dinamica' });
+
+  var thead = crear('thead');
+  var trh = crear('tr');
+  campo.columnas.forEach(function (c) { trh.appendChild(crear('th', { texto: c.titulo })); });
+  trh.appendChild(crear('th', { texto: '' }));
+  thead.appendChild(trh);
+  tabla.appendChild(thead);
+
+  var tbody = crear('tbody', { 'data-tabla': campo.clave });
+  tabla.appendChild(tbody);
+  envoltura.appendChild(tabla);
+
+  (filas.length ? filas : []).forEach(function (fila) { agregarFila(tbody, campo, fila); });
+  if (!filas.length) filaVacia(tbody, campo);
+
+  var contenedor = crear('div');
+  contenedor.appendChild(envoltura);
+  contenedor.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '+ Agregar fila',
+    onclick: function () { agregarFila(tbody, campo, null); SUCIO = true; }
+  }));
+  return contenedor;
+}
+
+/**
+ * Control de una celda de tabla según la definición de la columna.
+ *
+ *   opciones sin `abierta`  → <select>: lista cerrada, el usuario sólo elige.
+ *   opciones con `abierta`  → <input> + <datalist>: sugiere, pero deja escribir.
+ *   sin opciones            → <input> de texto.
+ *
+ * La distinción no es cosmética: una lista cerrada es lo que garantiza que
+ * "Antioquia" se escriba siempre igual y las series de KPI no se fragmenten.
+ */
+function controlDeColumna(col, valor) {
+  if (col.opciones && !col.abierta) {
+    var select = crear('select', {
+      'data-col': col.clave,
+      onchange: function () { SUCIO = true; }
+    });
+    select.appendChild(crear('option', { value: '', texto: '— elegir —' }));
+    col.opciones.forEach(function (op) {
+      select.appendChild(crear('option', { value: op, texto: op }));
+    });
+    // Si lo guardado ya no está en la lista, se conserva para no perder el dato.
+    if (valor && col.opciones.indexOf(valor) < 0) {
+      select.appendChild(crear('option', { value: valor, texto: valor + ' (fuera de lista)' }));
+    }
+    select.value = valor || '';
+    return select;
+  }
+
+  var input = crear('input', {
+    type: 'text',
+    'data-col': col.clave,
+    placeholder: col.titulo,
+    value: valor,
+    oninput: function () { SUCIO = true; }
+  });
+  if (col.tipo === 'numero') input.setAttribute('inputmode', 'decimal');
+
+  if (col.opciones && col.abierta) {
+    var idLista = 'lista-' + col.clave;
+    input.setAttribute('list', idLista);
+    if (!document.getElementById(idLista)) {
+      var datalist = crear('datalist', { id: idLista });
+      col.opciones.forEach(function (op) {
+        datalist.appendChild(crear('option', { value: op }));
+      });
+      document.body.appendChild(datalist);
+    }
+  }
+  return input;
+}
+
+/** Fila indicadora de "sin datos" que desaparece al agregar la primera fila. */
+function filaVacia(tbody, campo) {
+  var tr = crear('tr', { clase: 'vacia' });
+  tr.appendChild(crear('td', {
+    colspan: campo.columnas.length + 1,
+    texto: 'Sin registros. Usa "Agregar fila" si tienes novedades esta semana.'
+  }));
+  tbody.appendChild(tr);
+}
+
+function agregarFila(tbody, campo, valores) {
+  var vacia = tbody.querySelector('tr.vacia');
+  if (vacia) tbody.removeChild(vacia);
+
+  var tr = crear('tr');
+  campo.columnas.forEach(function (col) {
+    var td = crear('td');
+    var valor = valores ? (valores[col.clave] || '') : '';
+    td.appendChild(controlDeColumna(col, valor));
+    tr.appendChild(td);
+  });
+
+  var acciones = crear('td', { clase: 'acciones' });
+  acciones.appendChild(crear('button', {
+    clase: 'fila', type: 'button', title: 'Quitar fila', texto: '×',
+    onclick: function () {
+      tbody.removeChild(tr);
+      if (!tbody.querySelector('tr')) filaVacia(tbody, campo);
+      SUCIO = true;
+    }
+  }));
+  tr.appendChild(acciones);
+  tbody.appendChild(tr);
+  return tr;
+}
+
+/* ===================== Pegado con Ctrl+V ===================== */
+
+/**
+ * Un evento `paste` sólo llega al elemento que tiene el foco. Antes, hacer clic
+ * en el recuadro abría de inmediato el explorador de archivos y el foco se iba
+ * con él, así que Ctrl+V nunca aterrizaba en la zona: pegar "no funcionaba".
+ *
+ * Ahora el clic sólo enfoca —abrir el explorador es un botón aparte— y además se
+ * escucha el pegado a nivel de documento para encaminarlo a la zona activa, de
+ * modo que Ctrl+V también sirva cuando el foco está en el cuerpo de la página
+ * (que es justo lo que ocurre al abrir el formulario recién cargado).
+ */
+var ZONAS_PEGADO = [];
+var ZONA_ACTIVA = null;
+
+/** Marca una zona como destino del próximo Ctrl+V y la resalta. */
+function activarZona(destino) {
+  ZONA_ACTIVA = destino;
+  ZONAS_PEGADO.forEach(function (d) {
+    if (d.zona.classList) d.zona.classList.toggle('activa', d === destino);
+  });
+}
+
+/**
+ * Registra un recuadro que puede recibir un pegado.
+ * `recibir(dataTransfer)` devuelve true si consumió el contenido.
+ */
+function registrarZona(zona, tipo, recibir) {
+  var destino = { zona: zona, tipo: tipo, recibir: recibir };
+  ZONAS_PEGADO.push(destino);
+
+  zona.addEventListener('mousedown', function () { activarZona(destino); });
+  zona.addEventListener('focus', function () { activarZona(destino); });
+  zona.addEventListener('click', function () { zona.focus(); activarZona(destino); });
+  zona.addEventListener('paste', function (e) {
+    activarZona(destino);
+    if (recibir(e.clipboardData || window.clipboardData)) e.preventDefault();
+  });
+  return destino;
+}
+
+/** ¿El portapapeles trae un archivo de imagen? */
+function portapapelesConImagen(dt) {
+  var items = (dt && dt.items) || [];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].kind === 'file' && String(items[i].type).indexOf('image/') === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Zona a la que va un Ctrl+V que no cayó dentro de ningún recuadro.
+ *
+ * Se exige que el tipo coincida: un recorte de pantalla no tiene sentido en un
+ * campo de tabla ni un rango de Excel en uno de imagen. Si el usuario no ha
+ * elegido recuadro y hay más de uno posible, no se adivina.
+ */
+function destinoDePegado(tipo) {
+  if (ZONA_ACTIVA && ZONA_ACTIVA.tipo === tipo) return ZONA_ACTIVA;
+  var candidatas = ZONAS_PEGADO.filter(function (d) { return d.tipo === tipo; });
+  return candidatas.length === 1 ? candidatas[0] : null;
+}
+
+document.addEventListener('paste', function (e) {
+  var dt = e.clipboardData || window.clipboardData;
+  if (!dt || !ZONAS_PEGADO.length) return;
+
+  // Si cayó dentro de una zona, su propio manejador ya lo atendió.
+  var dentro = ZONAS_PEGADO.some(function (d) { return d.zona.contains(e.target); });
+  if (dentro) return;
+
+  // En una caja de texto, pegar texto debe seguir siendo pegar texto; sólo se
+  // desvía cuando lo que hay en el portapapeles es una imagen.
+  var hayImagen = portapapelesConImagen(dt);
+  var destinoEditable = e.target && (e.target.tagName === 'INPUT' ||
+    e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+  if (destinoEditable && !hayImagen) return;
+
+  var destino = destinoDePegado(hayImagen ? 'imagen' : 'tabla');
+  if (!destino) {
+    mostrarAviso('mensajeFormulario',
+      'Haz clic primero en el recuadro donde quieres pegar y vuelve a intentarlo.', 'alerta');
+    return;
+  }
+  if (destino.recibir(dt)) e.preventDefault();
+});
+
+/**
+ * Respaldo de los botones "Pegar": el marco en el que Apps Script sirve la
+ * interfaz no siempre concede permiso para leer el portapapeles por código, y
+ * en ese caso lo honesto es dejar la zona enfocada y pedir el atajo, que nunca
+ * depende de permisos.
+ */
+function pedirCtrlV(zona, aviso) {
+  zona.focus();
+  zona.classList.add('esperando');
+  mostrarAviso('mensajeFormulario', aviso ||
+    'Tu navegador no permite leer el portapapeles desde aquí. El recuadro ya ' +
+    'quedó seleccionado: presiona Ctrl+V (⌘+V en Mac) para pegar.', 'alerta');
+  setTimeout(function () { zona.classList.remove('esperando'); }, 5000);
+}
+
+/* ===================== Campos de imagen ===================== */
+
+/** Estado en memoria de los adjuntos, por clave de campo. */
+var ADJUNTOS = {};
+
+var MAX_MB_ADJUNTO = 8;
+
+/**
+ * Zona para adjuntar imágenes: acepta pegado (Ctrl+V), arrastre y selección
+ * de archivo. Los bytes viajan en base64 al servidor sólo la primera vez; una
+ * vez en Drive, lo que se conserva es el enlace.
+ */
+function construirImagen(campo, guardados) {
+  ADJUNTOS[campo.clave] = (guardados || []).map(function (a) {
+    return { nombre: a.nombre, enlace: a.enlace, comentario: a.comentario || '' };
+  });
+
+  var cont = crear('div');
+  var zona = crear('div', {
+    clase: 'zona-adjunto', tabindex: '0',
+    html: '<b>Haz clic aquí y pega con Ctrl+V</b>, o arrastra la imagen sobre ' +
+          'este recuadro' +
+          '<div class="pista">Recorte de pantalla, gráfica de Excel o archivo · ' +
+          'PNG, JPG o WEBP · máximo ' + MAX_MB_ADJUNTO + ' MB</div>'
+  });
+
+  var entrada = crear('input', { type: 'file', accept: 'image/*', multiple: 'multiple' });
+  entrada.style.display = 'none';
+
+  var lista = crear('div', { clase: 'lista-adjuntos' });
+
+  registrarZona(zona, 'imagen', function (dt) {
+    return recibirImagenes(campo, lista, dt) > 0;
+  });
+
+  // Arrastrar y soltar.
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    zona.addEventListener(ev, function (e) {
+      e.preventDefault(); zona.classList.add('sobre');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    zona.addEventListener(ev, function (e) {
+      e.preventDefault(); zona.classList.remove('sobre');
+    });
+  });
+  zona.addEventListener('drop', function (e) {
+    var archivos = e.dataTransfer.files || [];
+    for (var i = 0; i < archivos.length; i++) agregarImagen(campo, archivos[i], lista);
+  });
+
+  entrada.addEventListener('change', function () {
+    for (var i = 0; i < entrada.files.length; i++) agregarImagen(campo, entrada.files[i], lista);
+    entrada.value = '';
+  });
+
+  var barra = crear('div', { clase: 'barra-adjunto' });
+  barra.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '📋 Pegar imagen',
+    onclick: function () { pegarImagenDelPortapapeles(campo, zona, lista); }
+  }));
+  barra.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '📁 Elegir archivo',
+    onclick: function () { entrada.click(); }
+  }));
+
+  cont.appendChild(zona);
+  cont.appendChild(barra);
+  cont.appendChild(entrada);
+  cont.appendChild(lista);
+
+  if (campo.comentario) {
+    cont.appendChild(crear('label', {
+      clase: 'etiqueta-comentario',
+      texto: 'Comentario del área (se envía a la gerencia junto al indicador)'
+    }));
+    var ta = crear('textarea', {
+      rows: 3, 'data-comentario': campo.clave,
+      placeholder: 'Análisis de la cifra: qué explica el resultado y qué se está haciendo.',
+      oninput: function () { SUCIO = true; }
+    });
+    ta.value = (ADJUNTOS[campo.clave][0] || {}).comentario || '';
+    cont.appendChild(ta);
+  }
+
+  pintarAdjuntos(campo, lista);
+  return cont;
+}
+
+/** Convierte el archivo a base64 y lo agrega al estado del campo. */
+function agregarImagen(campo, archivo, lista) {
+  if (!archivo) return;
+  if (archivo.type.indexOf('image/') !== 0) {
+    alert('"' + archivo.name + '" no es una imagen.');
+    return;
+  }
+  if (archivo.size > MAX_MB_ADJUNTO * 1024 * 1024) {
+    alert('"' + archivo.name + '" pesa ' + (archivo.size / 1048576).toFixed(1) +
+          ' MB y el máximo es ' + MAX_MB_ADJUNTO + ' MB.');
+    return;
+  }
+
+  var lector = new FileReader();
+  lector.onload = function () {
+    // El resultado es "data:image/png;base64,XXXX": el servidor sólo quiere XXXX.
+    var base64 = String(lector.result).split(',')[1];
+    ADJUNTOS[campo.clave].push({
+      nombre: archivo.name || 'imagen.png',
+      mime: archivo.type,
+      base64: base64,
+      vistaPrevia: lector.result
+    });
+    SUCIO = true;
+    pintarAdjuntos(campo, lista);
+  };
+  lector.readAsDataURL(archivo);
+}
+
+/**
+ * Extrae del portapapeles todas las imágenes que traiga y las agrega al campo.
+ * Devuelve cuántas encontró.
+ *
+ * Se intentan tres rutas, de la más fiel a la más rebuscada: el archivo binario
+ * (recorte de pantalla, gráfica copiada de Excel), la lista de archivos del
+ * arrastre, y por último una imagen incrustada como `data:` dentro del HTML del
+ * portapapeles, que es como llegan las imágenes copiadas desde una página o un
+ * documento de Google.
+ */
+function recibirImagenes(campo, lista, dt) {
+  var encontradas = 0;
+
+  var items = dt.items || [];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].kind === 'file' && String(items[i].type).indexOf('image/') === 0) {
+      agregarImagen(campo, items[i].getAsFile(), lista);
+      encontradas++;
+    }
+  }
+
+  if (!encontradas && dt.files) {
+    for (var j = 0; j < dt.files.length; j++) {
+      if (String(dt.files[j].type).indexOf('image/') === 0) {
+        agregarImagen(campo, dt.files[j], lista);
+        encontradas++;
+      }
+    }
+  }
+
+  if (!encontradas && dt.getData) {
+    imagenesEnHtml(dt.getData('text/html')).forEach(function (uri) {
+      if (agregarImagenDataUri(campo, uri, lista)) encontradas++;
+    });
+  }
+
+  return encontradas;
+}
+
+/** Devuelve las imágenes incrustadas como data: URI dentro de un fragmento HTML. */
+function imagenesEnHtml(html) {
+  var salida = [];
+  var re = /<img[^>]+src\s*=\s*["'](data:image\/[a-z0-9.+-]+;base64,[^"']+)["']/gi;
+  var m;
+  while ((m = re.exec(String(html || '')))) salida.push(m[1]);
+  return salida;
+}
+
+/** Agrega una imagen que ya viene en base64 dentro de un data: URI. */
+function agregarImagenDataUri(campo, uri, lista) {
+  var partes = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(String(uri));
+  if (!partes) return false;
+
+  var base64 = partes[2];
+  var bytes = Math.floor(base64.length * 3 / 4);
+  if (bytes > MAX_MB_ADJUNTO * 1024 * 1024) {
+    alert('La imagen pegada pesa ' + (bytes / 1048576).toFixed(1) +
+          ' MB y el máximo es ' + MAX_MB_ADJUNTO + ' MB.');
+    return false;
+  }
+
+  ADJUNTOS[campo.clave].push({
+    nombre: 'imagen-pegada.' + (partes[1].split('/')[1] || 'png'),
+    mime: partes[1],
+    base64: base64,
+    vistaPrevia: uri
+  });
+  SUCIO = true;
+  pintarAdjuntos(campo, lista);
+  return true;
+}
+
+/**
+ * Botón "Pegar imagen". Intenta leer el portapapeles por código y, si el
+ * navegador no lo permite dentro del marco de Apps Script, cae al atajo.
+ */
+function pegarImagenDelPortapapeles(campo, zona, lista) {
+  if (!navigator.clipboard || !navigator.clipboard.read) { pedirCtrlV(zona); return; }
+
+  navigator.clipboard.read().then(function (elementos) {
+    var pendientes = [];
+    (elementos || []).forEach(function (elemento) {
+      elemento.types.forEach(function (tipo) {
+        if (tipo.indexOf('image/') !== 0) return;
+        pendientes.push(elemento.getType(tipo).then(function (blob) {
+          agregarImagen(campo, new File([blob], 'portapapeles.' +
+            (tipo.split('/')[1] || 'png'), { type: tipo }), lista);
+        }));
+      });
+    });
+
+    if (!pendientes.length) {
+      mostrarAviso('mensajeFormulario',
+        'No hay ninguna imagen en el portapapeles. Copia el recorte y vuelve a ' +
+        'pulsar "Pegar imagen".', 'alerta');
+      return;
+    }
+    Promise.all(pendientes).then(function () {
+      mostrarAviso('mensajeFormulario', '', '');
+    });
+  }).catch(function () { pedirCtrlV(zona); });
+}
+
+/** Dibuja las miniaturas y los enlaces de lo ya adjuntado. */
+function pintarAdjuntos(campo, lista) {
+  lista.innerHTML = '';
+  var adjuntos = ADJUNTOS[campo.clave] || [];
+
+  if (!adjuntos.length) {
+    lista.appendChild(crear('div', { clase: 'pista', texto: 'Sin imágenes adjuntas.' }));
+    return;
+  }
+
+  adjuntos.forEach(function (a, indice) {
+    var item = crear('div', { clase: 'adjunto' });
+
+    if (a.vistaPrevia) {
+      item.appendChild(crear('img', { src: a.vistaPrevia, alt: a.nombre }));
+    } else {
+      item.appendChild(crear('div', { clase: 'sin-vista', texto: '🖼️' }));
+    }
+
+    var info = crear('div', { clase: 'info' });
+    info.appendChild(crear('div', { clase: 'nombre', texto: a.nombre }));
+    info.appendChild(crear('div', {
+      clase: 'pista',
+      texto: a.enlace ? 'Guardada en Drive' : 'Nueva · se subirá al guardar'
+    }));
+    if (a.enlace) {
+      info.appendChild(crear('a', { href: a.enlace, target: '_blank', texto: 'Abrir en Drive' }));
+    }
+    item.appendChild(info);
+
+    item.appendChild(crear('button', {
+      clase: 'fila', type: 'button', title: 'Quitar', texto: '×',
+      onclick: function () {
+        ADJUNTOS[campo.clave].splice(indice, 1);
+        SUCIO = true;
+        pintarAdjuntos(campo, lista);
+      }
+    }));
+
+    lista.appendChild(item);
+  });
+}
+
+/* ===================== Tablas pegadas desde Excel ===================== */
+
+/** Estado en memoria de las tablas libres, por clave de campo. */
+var TABLAS_LIBRES = {};
+
+/**
+ * Campo que recibe un rango copiado de Excel. El portapapeles entrega el rango
+ * como texto separado por tabuladores, así que se parsea tal cual y se conserva
+ * la estructura original: los encabezados son los de la hoja de origen.
+ */
+function construirTablaLibre(campo, guardada) {
+  TABLAS_LIBRES[campo.clave] = (guardada && guardada.filas)
+    ? { encabezados: guardada.encabezados || [], filas: guardada.filas || [] }
+    : { encabezados: [], filas: [] };
+
+  var cont = crear('div');
+  var zona = crear('div', {
+    clase: 'zona-adjunto', tabindex: '0',
+    html: '<b>Haz clic aquí y pega el rango copiado de Excel (Ctrl+V)</b>' +
+          '<div class="pista">Se conservan los encabezados y las columnas ' +
+          'originales. La primera fila se toma como encabezado.</div>'
+  });
+
+  var vista = crear('div', { clase: 'tabla-envoltura' });
+
+  registrarZona(zona, 'tabla', function (dt) {
+    var datos = tablaDelPortapapeles(dt);
+    if (!datos) return false;
+    TABLAS_LIBRES[campo.clave] = datos;
+    SUCIO = true;
+    pintarTablaLibre(campo, vista);
+    return true;
+  });
+
+  var barra = crear('div', { clase: 'barra-adjunto' });
+  barra.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: '📋 Pegar tabla',
+    onclick: function () { pegarTablaDelPortapapeles(campo, zona, vista); }
+  }));
+  barra.appendChild(crear('button', {
+    clase: 'agregar', type: 'button', texto: 'Vaciar tabla',
+    onclick: function () {
+      TABLAS_LIBRES[campo.clave] = { encabezados: [], filas: [] };
+      SUCIO = true;
+      pintarTablaLibre(campo, vista);
+    }
+  }));
+
+  cont.appendChild(zona);
+  cont.appendChild(barra);
+  cont.appendChild(vista);
+
+  pintarTablaLibre(campo, vista);
+  return cont;
+}
+
+/**
+ * Saca la tabla del portapapeles. Se prefiere el HTML —Excel copia la selección
+ * como un `<table>` real— porque conserva las celdas vacías, las combinadas y
+ * los valores con saltos de línea; el texto tabulado es el respaldo.
+ * Devuelve null si el portapapeles no traía nada aprovechable.
+ */
+function tablaDelPortapapeles(dt) {
+  if (!dt || !dt.getData) return null;
+
+  var filas = filasDesdeHtml(dt.getData('text/html'));
+  if (!filas || !filas.length) filas = filasDesdeTsv(dt.getData('text/plain'));
+  return filas && filas.length ? tablaDesdeFilas(filas) : null;
+}
+
+/** Convierte una matriz de celdas en { encabezados, filas }, cuadrando el ancho. */
+function tablaDesdeFilas(filas) {
+  var utiles = filas.filter(function (f) {
+    return f.some(function (c) { return String(c).trim().length > 0; });
+  });
+  if (!utiles.length) return { encabezados: [], filas: [] };
+
+  var ancho = utiles.reduce(function (max, f) { return Math.max(max, f.length); }, 0);
+  var cuadrar = function (f) {
+    var salida = [];
+    for (var i = 0; i < ancho; i++) salida.push(String(f[i] === undefined ? '' : f[i]).trim());
+    return salida;
+  };
+  return { encabezados: cuadrar(utiles[0]), filas: utiles.slice(1).map(cuadrar) };
+}
+
+/** Filas de la primera <table> de un fragmento HTML del portapapeles. */
+function filasDesdeHtml(html) {
+  if (!String(html || '').match(/<t(able|r)\b/i)) return null;
+  var doc;
+  try {
+    doc = new DOMParser().parseFromString(String(html), 'text/html');
+  } catch (e) {
+    return null;
+  }
+  var tabla = doc.querySelector('table');
+  if (!tabla) return null;
+
+  var filas = [];
+  Array.prototype.forEach.call(tabla.querySelectorAll('tr'), function (tr) {
+    var celdas = tr.querySelectorAll('th, td');
+    if (!celdas.length) return;
+    var fila = [];
+    Array.prototype.forEach.call(celdas, function (celda) {
+      fila.push(String(celda.textContent || '').replace(/\s+/g, ' ').trim());
+      // Una celda combinada ocupa varias columnas: se rellenan para que los
+      // encabezados sigan alineados con sus datos.
+      var ancho = Number(celda.getAttribute('colspan') || 1);
+      for (var i = 1; i < ancho; i++) fila.push('');
+    });
+    filas.push(fila);
+  });
+  return filas.length ? filas : null;
+}
+
+/**
+ * Divide el texto tabulado del portapapeles en celdas.
+ *
+ * No basta con partir por tabuladores y saltos de línea: cuando una celda de
+ * Excel contiene un salto de línea, Excel la entrega entre comillas, y partir a
+ * ciegas rompería la fila en dos.
+ */
+function filasDesdeTsv(texto) {
+  var s = String(texto || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!s) return [];
+
+  var filas = [], fila = [], celda = '', entreComillas = false;
+
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (entreComillas) {
+      if (c !== '"') { celda += c; }
+      else if (s.charAt(i + 1) === '"') { celda += '"'; i++; }   // comilla escapada
+      else { entreComillas = false; }
+      continue;
+    }
+    if (c === '"' && celda === '') entreComillas = true;
+    else if (c === '\t') { fila.push(celda); celda = ''; }
+    else if (c === '\n') { fila.push(celda); filas.push(fila); fila = []; celda = ''; }
+    else celda += c;
+  }
+  if (celda !== '' || fila.length) { fila.push(celda); filas.push(fila); }
+
+  return filas;
+}
+
+/** Botón "Pegar tabla", con el mismo respaldo al atajo que el de imágenes. */
+function pegarTablaDelPortapapeles(campo, zona, vista) {
+  var aplicar = function (filas) {
+    if (!filas || !filas.length) {
+      mostrarAviso('mensajeFormulario',
+        'El portapapeles no tiene una tabla. Copia el rango en Excel y vuelve a ' +
+        'pulsar "Pegar tabla".', 'alerta');
+      return;
+    }
+    TABLAS_LIBRES[campo.clave] = tablaDesdeFilas(filas);
+    SUCIO = true;
+    pintarTablaLibre(campo, vista);
+    mostrarAviso('mensajeFormulario', '', '');
+  };
+
+  if (!navigator.clipboard || !navigator.clipboard.readText) { pedirCtrlV(zona); return; }
+  navigator.clipboard.readText()
+    .then(function (texto) { aplicar(filasDesdeTsv(texto)); })
+    .catch(function () { pedirCtrlV(zona); });
+}
+
+/** Muestra la tabla pegada, en modo sólo lectura. */
+function pintarTablaLibre(campo, vista) {
+  var datos = TABLAS_LIBRES[campo.clave];
+  vista.innerHTML = '';
+
+  if (!datos.filas.length) {
+    vista.appendChild(crear('div', {
+      clase: 'pista', style: 'padding:12px',
+      texto: 'Sin tabla. Copia el rango en Excel y pégalo en el recuadro de arriba.'
+    }));
+    return;
+  }
+
+  var tabla = crear('table', { clase: 'dinamica' });
+  var thead = crear('thead');
+  var trh = crear('tr');
+  datos.encabezados.forEach(function (h) { trh.appendChild(crear('th', { texto: h })); });
+  thead.appendChild(trh);
+  tabla.appendChild(thead);
+
+  var tbody = crear('tbody');
+  datos.filas.forEach(function (fila) {
+    var tr = crear('tr');
+    for (var i = 0; i < datos.encabezados.length; i++) {
+      tr.appendChild(crear('td', { clase: 'solo-lectura', texto: fila[i] || '' }));
+    }
+    tbody.appendChild(tr);
+  });
+  tabla.appendChild(tbody);
+  vista.appendChild(tabla);
+}
+
+/** Lee el formulario y arma el objeto que espera apiGuardar. */
+function recolectar() {
+  var campos = {};
+
+  CAMPOS.forEach(function (campo) {
+    if (campo.tipo === 'imagen') {
+      var adjuntos = (ADJUNTOS[campo.clave] || []).map(function (a) {
+        // `vistaPrevia` es sólo para la interfaz: no se envía al servidor.
+        return { nombre: a.nombre, mime: a.mime, base64: a.base64,
+                 enlace: a.enlace, comentario: a.comentario };
+      });
+      if (campo.comentario) {
+        var ta = document.querySelector('[data-comentario="' + campo.clave + '"]');
+        var comentario = ta ? ta.value.trim() : '';
+        if (adjuntos.length) adjuntos[0].comentario = comentario;
+        else if (comentario) adjuntos.push({ nombre: '(sin imagen)', comentario: comentario });
+      }
+      campos[campo.clave] = adjuntos;
+
+    } else if (campo.tipo === 'tablaLibre') {
+      campos[campo.clave] = TABLAS_LIBRES[campo.clave] || { encabezados: [], filas: [] };
+
+    } else if (campo.tipo === 'tabla') {
+      var tbody = document.querySelector('tbody[data-tabla="' + campo.clave + '"]');
+      var filas = [];
+      if (tbody) {
+        Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (tr) {
+          if (tr.className === 'vacia') return;
+          var fila = {};
+          var algo = false;
+          Array.prototype.forEach.call(tr.querySelectorAll('[data-col]'), function (control) {
+            var v = String(control.value || '').trim();
+            fila[control.getAttribute('data-col')] = v;
+            if (v) algo = true;
+          });
+          if (algo) filas.push(fila);
+        });
+      }
+      campos[campo.clave] = filas;
+    } else {
+      var el = document.querySelector('[data-campo="' + campo.clave + '"]');
+      campos[campo.clave] = el ? el.value.trim() : '';
+    }
+  });
+
+  var periodo = periodoSeleccionado($('selectorPeriodo'));
+  return { anio: periodo.anio, semana: periodo.semana, campos: campos };
+}
+
+/* ===================== Acciones ===================== */
+
+function guardar() {
+  var datos = recolectar();
+  $('btnGuardar').disabled = true;
+  $('estadoGuardado').textContent = 'Guardando…';
+  mostrarAviso('mensajeFormulario', '', '');
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('btnGuardar').disabled = false;
+      SUCIO = false;
+      $('estadoGuardado').textContent = '';
+      mostrarAviso('mensajeFormulario', '✔ ' + r.mensaje, 'ok');
+    })
+    .withFailureHandler(function (e) {
+      $('btnGuardar').disabled = false;
+      $('estadoGuardado').textContent = '';
+      mostrarAviso('mensajeFormulario', 'No se pudo guardar: ' + e.message, 'error');
+    })
+    .apiGuardar(datos);
+}
+
+function cambiarPeriodo() {
+  if (SUCIO && !confirm('Tienes cambios sin guardar. ¿Cambiar de semana y perderlos?')) {
+    var p = SESION.periodo;
+    $('selectorPeriodo').value = p.anio + '-' + p.semana;
+    return;
+  }
+  recargarRegistro();
+}
+
+function recargarRegistro() {
+  var periodo = periodoSeleccionado($('selectorPeriodo'));
+  pintarPeriodo(periodo.anio, periodo.semana);
+  mostrarAviso('mensajeFormulario', '', '');
+  $('estadoGuardado').textContent = 'Cargando…';
+
+  google.script.run
+    .withSuccessHandler(pintarFormulario)
+    .withFailureHandler(function (e) {
+      mostrarAviso('mensajeFormulario', e.message, 'error');
+      $('estadoGuardado').textContent = '';
+    })
+    .apiCargarRegistro(periodo.anio, periodo.semana);
+}
+
+/* ===================== Informe gerencial (sólo Administrador) =====================
+ *
+ * Ocultar estos controles a un colaborador es cosmético: el servidor exige rol
+ * de administrador en `apiPrevisualizarCorreo` y `apiEnviarInformeGerencial`.
+ */
+
+function limpiarVistaPrevia() {
+  $('vistaPrevia').classList.add('oculto');
+  mostrarAviso('mensajeInforme', '', '');
+}
+
+function previsualizarCorreo() {
+  var periodo = periodoSeleccionado($('periodoInforme'));
+  $('btnPrevisualizar').disabled = true;
+  mostrarAviso('mensajeInforme', 'Consolidando las siete áreas…', 'info');
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('btnPrevisualizar').disabled = false;
+      pintarSobre(r);
+      if (r.aviso) mostrarAviso('mensajeInforme', r.aviso, 'alerta');
+      else if (r.fuente === 'ia') {
+        mostrarAviso('mensajeInforme',
+          'Redactado con Gemini sobre los ' + r.totalReportes + ' reporte(s) de la semana.', 'info');
+      } else {
+        mostrarAviso('mensajeInforme',
+          'Informe automático sobre los ' + r.totalReportes + ' reporte(s) de la semana.', 'info');
+      }
+    })
+    .withFailureHandler(function (e) {
+      $('btnPrevisualizar').disabled = false;
+      limpiarVistaPrevia();
+      mostrarAviso('mensajeInforme', e.message, 'error');
+    })
+    .apiPrevisualizarCorreo(periodo.anio, periodo.semana);
+}
+
+/** Dibuja el "sobre" (Para / Copia / Asunto) y el cuerpo real del correo. */
+function pintarSobre(r) {
+  var cabecera = $('sobreCabecera');
+  cabecera.innerHTML = '';
+
+  var fila = function (etiqueta, valor) {
+    var f = crear('div', { clase: 'fila' });
+    f.appendChild(crear('span', { clase: 'etq', texto: etiqueta }));
+    f.appendChild(crear('span', { clase: 'val', texto: valor }));
+    return f;
+  };
+  cabecera.appendChild(fila('Para:', r.para || '⚠️ sin configurar'));
+  if (r.cc) cabecera.appendChild(fila('Copia:', r.cc));
+  cabecera.appendChild(fila('Asunto:', r.asunto));
+
+  // El HTML lo genera el servidor y todo el contenido del usuario pasa por
+  // escaparHtml_ antes de llegar aquí.
+  $('sobreCuerpo').innerHTML = r.html;
+  $('vistaPrevia').classList.remove('oculto');
+}
+
+function enviarInformeGerencial() {
+  var periodo = periodoSeleccionado($('periodoInforme'));
+  var texto = $('periodoInforme').options[$('periodoInforme').selectedIndex].textContent;
+  if (!confirm('¿Enviar al gerente el informe de la ' + texto + '?')) return;
+
+  $('btnEnviar').disabled = true;
+  mostrarAviso('mensajeInforme', 'Enviando…', 'info');
+
+  google.script.run
+    .withSuccessHandler(function (r) {
+      $('btnEnviar').disabled = false;
+      mostrarAviso('mensajeInforme', '✔ ' + r.mensaje, 'ok');
+    })
+    .withFailureHandler(function (e) {
+      $('btnEnviar').disabled = false;
+      mostrarAviso('mensajeInforme', 'No se pudo enviar: ' + e.message, 'error');
+    })
+    .apiEnviarInformeGerencial(periodo.anio, periodo.semana);
+}
+</script>

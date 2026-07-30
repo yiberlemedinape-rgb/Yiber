@@ -15,6 +15,13 @@ FFT, integración a velocidad, valores globales, espectro con marcas
 1X/2X/3X/PP/fallas ±10% y onda circular — antes de pasar los picos al motor
 de reglas en el servidor (ver §7 Metodología).
 
+> 📁 **Este repositorio contiene dos proyectos independientes de Apps Script.**
+> El de este README vive en `apps-script/`. El segundo, en
+> [`informes-semanales/`](informes-semanales/README.md), automatiza el flujo de
+> **informes periódicos** de las siete áreas y el envío del informe gerencial
+> los jueves a las 5:00 p. m. Cada uno se publica en su propio proyecto de Apps
+> Script (cada carpeta tiene su `.clasp.json.example`).
+
 ---
 
 ## 1. Cómo funciona el proceso VES004 (contexto)
