@@ -151,38 +151,25 @@ function correosAdmin_() {
     .map(function (u) { return u.correo; });
 }
 
-/** Correo del propietario del libro (cadena vacía si Google no lo expone). */
-function correoPropietario_() {
-  try {
-    var duenio = libro_().getOwner();
-    return duenio ? String(duenio.getEmail()).toLowerCase() : '';
-  } catch (e) {
-    return '';
-  }
-}
-
 /**
  * ¿Quien está ejecutando es el Administrador?
  *
  * El rol sale de la columna "Cargo" de la hoja "Usuario" y de ningún otro lado:
  * escribir "Administrador" en la fila de alguien le da el permiso, y cambiarle
  * el cargo a un área se lo quita y le devuelve su formulario. No hay listas de
- * correos paralelas que mantener ni que puedan contradecir a la hoja.
+ * correos paralelas, ni propiedades de script, ni excepciones para el
+ * propietario del libro: una sola celda decide.
  *
- * Única excepción: mientras NADIE tenga ese cargo, se acepta al propietario del
- * libro. Es un seguro contra el bloqueo del primer día —si el permiso sólo
- * viviera en la hoja, un libro recién creado no tendría a nadie que pudiera
- * operarlo—, y deja de aplicar en cuanto se escribe el primer Administrador.
+ * Consecuencia deliberada: si NADIE tiene ese cargo, nadie puede disparar el
+ * informe a mano. El envío automático del viernes no depende de esto —lo ejecuta
+ * el disparador, no una persona—, así que la gerencia sigue recibiendo su
+ * informe; lo que se pierde es el botón manual. "🔒 Verificar conexión con
+ * Gemini" avisa cuando la hoja se queda sin ningún Administrador.
  */
 function esAdministrador_() {
   var correo = correoSesion_();
   if (!correo) return false;
-
-  var admins = correosAdmin_();
-  if (admins.length) return admins.indexOf(correo) >= 0;
-
-  var propietario = correoPropietario_();
-  return propietario !== '' && propietario === correo;
+  return correosAdmin_().indexOf(correo) >= 0;
 }
 
 /** Lanza un error si quien ejecuta no es administrador. */

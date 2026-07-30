@@ -217,6 +217,7 @@ function construirCorreo_(anio, semana) {
     texto: informe.markdown,
     fuente: informe.fuente,
     aviso: informe.aviso,
+    cifrasSinRespaldo: informe.cifrasSinRespaldo || [],
     etiqueta: etiqueta,
     totalReportes: informe.consolidado.totalReportes,
     faltantes: informe.consolidado.faltantes
@@ -268,14 +269,10 @@ function enviarInformeSemanal() {
     console.log(r.mensaje + ' Fuente: ' + r.fuente + '.');
   } catch (e) {
     console.error('Fallo el envío automático: ' + e.message);
-    // Mismo criterio que el permiso: los cargos de Administrador y, si aún no
-    // hay ninguno, el propietario del libro. Un fallo silencioso el viernes a
-    // las 6 de la mañana es peor que un correo de más.
+    // Mismo criterio que el permiso: quienes tengan el cargo de Administrador
+    // en la hoja "Usuario". Si no hay ninguno, el motivo queda en el registro de
+    // ejecuciones, que es donde el menú de verificación dice ir a mirarlo.
     var admins = correosAdmin_();
-    if (!admins.length) {
-      var propietario = correoPropietario_();
-      if (propietario) admins = [propietario];
-    }
     if (admins.length) {
       MailApp.sendEmail(admins.join(','),
         '⚠️ Falló el envío del informe gerencial',

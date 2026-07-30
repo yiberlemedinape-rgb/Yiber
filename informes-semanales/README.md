@@ -303,6 +303,7 @@ cosas y dice cuáles fallan:
 | **Drive** | **Crea y borra un archivo de prueba.** La cuenta puede *ver* la carpeta y aun así no poder escribir en ella, y ese fallo sólo aparecería cuando alguien intente adjuntar una imagen. |
 | **Destinatario** | Que `CORREO_GERENTE` esté configurado. |
 | **Envío automático** | Que el disparador esté instalado. |
+| **Administradores** | Que al menos una fila de `Usuario` tenga el cargo `Administrador`. Sin ninguno, nadie puede enviar el informe a mano. |
 | **Semana en curso** | Cuántos reportes llegaron, cuántas imágenes leerá Gemini y quién falta. |
 
 Los errores traen la causa probable y la propiedad a corregir: un `404` señala
@@ -406,18 +407,21 @@ El mismo criterio aplica al menú de Google Sheets, donde cada acción pasa por
 `exigirAdministrador_()`:
 
 - **Administrador** = quien tenga `Administrador` en la columna **Cargo** de la
-  hoja `Usuario`. No hay ninguna lista de correos aparte: el permiso se otorga y
-  se retira escribiendo en esa celda, en el mismo sitio donde ya se decide qué
-  formulario ve cada persona.
+  hoja `Usuario`. **Esa celda es la única fuente del permiso**: no hay listas de
+  correos, ni propiedades de script, ni excepción para el propietario del libro.
 - Cambiarle el cargo a un área le quita el rol y le devuelve su formulario. El
   efecto es inmediato: no hay que volver a publicar nada.
 - Se acepta también `Admin`, y un cargo compuesto como `Administrador SAU` para
   quien administra el sistema y además debe entregar su propio reporte (requiere
   `CONFIG.ADMIN_TAMBIEN_REPORTA = true`). Un cargo que sólo se *parece*, como
   `Administrativo` o `Director Administrativo`, no otorga nada.
-- Mientras **nadie** tenga ese cargo se acepta al **propietario del libro**, para
-  que un libro recién creado no quede sin nadie que pueda operarlo. En cuanto se
-  escribe el primer Administrador, esa excepción deja de aplicar.
+
+> ⚠️ **Consecuencia de que no haya excepciones:** si nadie tiene el cargo, nadie
+> puede disparar el informe a mano. El **envío automático del viernes no se ve
+> afectado** —lo ejecuta el disparador, no una persona—, así que la gerencia
+> sigue recibiendo su informe; lo que se pierde es el botón manual. El menú
+> **🔒 Verificar conexión con Gemini** avisa en cuanto la hoja se queda sin
+> ningún Administrador.
 - Quien no sea administrador ve el menú, pero al hacer clic recibe un aviso
   explicando cómo pedir acceso. No se ejecuta nada.
 
@@ -443,11 +447,21 @@ resultados y falla si dejan de coincidir.
 
 ```markdown
 ## 📋 RESUMEN EJECUTIVO (Semana Actual)
+## 🧭 DIRECCIÓN — TEMAS REPORTADOS POR LOS DIRECTORES
 ## 🚨 ALERTAS CRÍTICAS Y CUELLOS DE BOTELLA
 ## 💰 GESTIÓN COMERCIAL Y KAM
 ## ⚙️ OPERACIONES, SAU Y SOPORTE TÉCNICO
 ## 👥 DESARROLLO DE PERSONAL
 ```
+
+La sección **🧭 DIRECCIÓN** es distinta de las demás. Las otras son temáticas:
+cruzan áreas y se quedan con lo excepcional. Ésta es **nominal y exhaustiva** —un
+subtítulo por director y, bajo él, sus siete temas del formulario, incluidos los
+que no reportó ("Sin novedades reportadas")—, porque la gerencia necesita poder
+leer entero lo que entregó cada dirección sin que un filtro de relevancia decida
+por ella. Las tablas que entregaron se reproducen **como tablas**, con sus
+columnas y sus valores exactos: una cifra en tabla se audita; disuelta en un
+párrafo, no.
 
 Cierra con un anexo de **cobertura**: cuántos reportes llegaron y **quién no
 reportó** (calculado contra la hoja `Usuario`).
@@ -455,7 +469,7 @@ reportó** (calculado contra la hoja `Usuario`).
 ### 6.2 Dos redactores
 
 1. **Determinista** (`Informe.gs`) — siempre disponible, sin dependencias.
-   Arma las cinco secciones desde los datos crudos: marca con 🔴 los equipos
+   Arma las seis secciones desde los datos crudos: marca con 🔴 los equipos
    cuyo estado o falla contiene palabras críticas, ordena las OS por días de
    demora, resalta clientes y valores en negrita.
 2. **Asistido por Gemini** (`Ia.gs`) — si hay `GEMINI_API_KEY`, el modelo
@@ -463,11 +477,64 @@ reportó** (calculado contra la hoja `Usuario`).
    sobre el JSON consolidado.
 
 El determinista es el **respaldo real**: si no hay clave, falla la red, la API
-responde un error o el modelo declina la solicitud, el correo semanal sale
-igual con toda la información. Los avisos de por qué se usó el respaldo se ven
-en la vista previa de la interfaz.
+responde un error, el modelo declina la solicitud **o escribe cifras que no
+existen** (§6.3), el correo semanal sale igual con toda la información. Los
+avisos de por qué se usó el respaldo se ven en la vista previa de la interfaz.
 
-### 6.3 Cómo lee Gemini las imágenes
+### 6.3 Veracidad: ninguna cifra puede salir de la nada
+
+Éste es el punto donde un informe automático se gana o se pierde la confianza.
+Una cifra inventada es peor que una ausente, porque nadie la audita hasta que ya
+se decidió con ella.
+
+Hay **tres capas**, y las tres hacen falta:
+
+**1. Las directrices se lo prohíben.** `DIRECTRICES_INFORME` abre con una sección
+de VERACIDAD que manda sobre todas las demás: no inventar, no estimar, no
+aproximar, no completar; **no calcular cifras nuevas** (ni totales, ni promedios,
+ni porcentajes que no vengan dados); copiar los valores con su misma precisión
+—nada de convertir `95,8 %` en `96 %`—; y escribir `sin dato reportado` donde
+falte el dato. La temperatura del modelo está en `0.05`: el informe no debe ser
+creativo, debe ser fiel.
+
+**2. Se comprueba mecánicamente.** `cifrasSinRespaldo_()` extrae del texto los
+códigos de equipo (`EMR-####`) y los importes de cinco dígitos o más, y busca
+cada uno en el JSON que se le entregó. Lo que no está, se señala.
+
+**3. Se impide que salga.** Si la comprobación encuentra algo —una cifra sin
+respaldo o una frase que remite a un adjunto (§6.4)—, el sistema **no se limita a
+avisar**:
+
+```
+redactar → contrastar → ¿inventó? → pedir corrección señalando la cifra exacta
+                                  → contrastar de nuevo
+                                  → ¿insiste? → descartar su redacción entera
+                                                y enviar el informe determinista
+```
+
+Decirle "no inventes" otra vez no sirve; decirle *"escribiste 850.000.000 y no
+existe"* sí, porque convierte una regla abstracta en un error concreto que
+corregir. Y si aun así insiste, sale el informe determinista, que se construye
+desde la hoja y por tanto **no puede contener nada que nadie haya reportado**.
+
+> Esto no es teórico. Midiendo contra la API real, **en torno a una de cada
+> cuatro redacciones** colaba alguna cifra inventada — en un caso, una tabla
+> entera con un cliente inexistente y su importe. Con la corrección automática
+> esas redacciones dejan de llegar al correo.
+
+**Alcance, sin adornos.** La comprobación detecta lo que se puede detectar
+mecánicamente:
+
+| Detecta | No detecta |
+|---|---|
+| Un código `EMR-####` que no existe (nunca se deriva de nada) | Un importe real atribuido al cliente equivocado |
+| Un importe que no aparece en los datos | Una interpretación tendenciosa de un dato correcto |
+| | Cifras de menos de cinco dígitos: conteos, porcentajes y días se omiten a propósito, porque revisarlos sólo generaría ruido |
+
+Por eso la vista previa sigue existiendo: el administrador lee antes de enviar.
+El sistema le quita de encima la clase de error que una máquina sí puede cazar.
+
+### 6.4 Cómo lee Gemini las imágenes
 
 > ⚠️ **Gemini no puede navegar una carpeta de Drive.** `generateContent` no tiene
 > conector a Drive: sólo acepta bytes dentro de la petición (`inline_data`) o
@@ -480,11 +547,16 @@ dice de qué área y de qué indicador es —sin ese rótulo el modelo recibe ca
 sin contexto— y, si el campo tiene comentario, también lo incluye.
 
 **El informe no menciona adjuntos.** Las cifras de las imágenes quedan escritas
-dentro del texto, en la sección que les corresponde. Las directrices prohíben
-explícitamente escribir "ver imagen adjunta", nombrar archivos o enlazar
-carpetas: la gerencia lee el informe, no abre archivos. Al JSON que viaja al
-modelo tampoco se le pasan nombres de archivo, sólo el comentario del área —
-nombrarlos invitaba al modelo a remitir al adjunto.
+dentro del texto, en la sección que les corresponde. Al JSON que viaja al modelo
+tampoco se le pasan nombres de archivo, sólo el comentario del área — nombrarlos
+invitaba al modelo a remitir al adjunto.
+
+Esto se sostiene con las mismas tres capas que la veracidad (§6.3): las
+directrices lo prohíben, `lenguajeDeAdjuntos_()` lo **detecta** —"ver imagen
+adjunta", "según el archivo", "se adjunta", una extensión `.png`, un enlace de
+Drive— y, si aparece, entra en el mismo ciclo de corrección y descarte. La razón
+de no fiarlo sólo a la instrucción es la de siempre: medido contra la API real,
+se colaba de vez en cuando.
 
 **Gráficas.** Cuando una imagen es una gráfica, el modelo la reconstruye en dos
 partes: una **tabla Markdown** con los datos que puede leer (serie, periodo,
@@ -506,7 +578,7 @@ Si una imagen se omite —porque se borró de Drive, porque se superó un tope o
 porque su tipo no es interpretable— **el informe se envía igual** y el aviso
 dice cuál faltó. Nunca se calla.
 
-### 6.4 Cómo se llama a Gemini
+### 6.5 Cómo se llama a Gemini
 
 ```
 POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
@@ -541,7 +613,7 @@ Detalles que importan en la práctica:
 - Una respuesta **truncada pero con texto** sí se aprovecha; se le añade una
   nota al final indicando que viene incompleta.
 
-### 6.5 Umbrales configurables
+### 6.6 Umbrales configurables
 
 | Constante | Por defecto | Efecto |
 |---|---|---|
@@ -614,7 +686,7 @@ Google**, con dobles de prueba de `SpreadsheetApp`, `Utilities`,
 `PropertiesService`, `LockService`, `Session`, `MailApp` y `UrlFetchApp`:
 
 ```bash
-node pruebas/prueba-local.js         # ejecuta las ~250 verificaciones
+node pruebas/prueba-local.js         # ejecuta las ~295 verificaciones
 VER=1 node pruebas/prueba-local.js   # además imprime el informe generado
 ```
 
@@ -637,6 +709,14 @@ Dos bloques valen la pena por separado:
   cargo parecido (`Administrativo`) no lo herede, la excepción del propietario
   mientras la hoja no nombre a nadie, y el mensaje de error que dice en qué celda
   se concede.
+- **Veracidad del informe** (§6.3): que una cifra o un código de equipo
+  inventados se detecten, que provoquen un segundo intento señalándole al modelo
+  la cifra exacta, que el texto enviado ya no la contenga, y que si el modelo
+  insiste se descarte su redacción entera y salga el informe determinista. Lo
+  mismo para las frases que remiten a un adjunto.
+- **Detalle de dirección** (§6.1): que la sección exista en las directrices y en
+  el informe determinista, con un subtítulo por director, sus siete temas, las
+  tablas reproducidas como tablas y los valores sin redondear.
 - **Pegado en la interfaz** (§3.4): `Js.html` se carga en un navegador simulado
   y se **dispara un evento `paste` de verdad** para comprobar dónde aterriza.
   Cubre el encaminamiento (imagen → recuadro de imagen, texto tabulado → recuadro
@@ -669,9 +749,18 @@ propiedades del script.
 
 Comprueba lo que ninguna simulación puede: que la clave sea válida, que el modelo
 exista, que las imágenes de la semana lleguen de verdad, y que el informe que
-redacta el modelo real traiga las cinco secciones, use negritas y **no remita al
-lector a ningún adjunto ni nombre archivos** — la directriz añadida en §6.3, que
-sólo un modelo real puede confirmar que se está respetando.
+redacta el modelo real traiga las seis secciones, detalle los temas del director
+con sus cifras exactas, use negritas, **no remita a ningún adjunto** y **no
+contenga ni una cifra ajena a los datos**.
+
+Esa última comprobación es la que justifica todo §6.3: fue ejecutándola contra la
+API real como se descubrió que el modelo inventaba cifras en torno a una de cada
+cuatro redacciones pese a tenerlo prohibido por escrito. Ninguna prueba con la
+API simulada podía revelarlo, porque la respuesta simulada la escribo yo.
+
+> ⚠️ **Cuota.** El plan gratuito de la API limita las peticiones diarias. Para la
+> operación real es irrelevante —una o dos llamadas por semana—, pero ejecutar
+> esta prueba en bucle agota la cuota del día.
 
 Ejecútalo antes de tocar el `ESQUEMA`: si renombras una clave o una columna,
 las pruebas lo detectan de inmediato.

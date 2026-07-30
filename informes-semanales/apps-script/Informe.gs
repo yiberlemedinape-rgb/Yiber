@@ -205,6 +205,7 @@ function informeDeterminista_(consolidado) {
   L.push('');
 
   L.push(seccionResumen_(consolidado, kpis));
+  L.push(seccionDireccion_(consolidado));
   L.push(seccionAlertas_(consolidado));
   L.push(seccionComercial_(consolidado, kpis));
   L.push(seccionOperaciones_(consolidado, kpis));
@@ -249,6 +250,90 @@ function seccionResumen_(consolidado, kpis) {
   }
 
   return '## 📋 RESUMEN EJECUTIVO (Semana Actual)\n\n' + frases.join(' ') + '\n';
+}
+
+/**
+ * Temas que reporta un director, en el orden en que los entrega el formulario.
+ * Vive aquí y no repartido por el código porque es la definición de "detallado":
+ * si mañana se agrega una columna al formulario de Directores, se agrega aquí y
+ * aparece en el informe.
+ */
+var TEMAS_DIRECCION = [
+  { clave: 'novedadesPersonal', titulo: 'Novedades de Personal y Desempeño', tipo: 'texto' },
+  { clave: 'visitasClientes', titulo: 'Visitas a Clientes y Actividades', tipo: 'tabla',
+    columnas: [['cliente', 'Cliente'], ['actividad', 'Actividad']] },
+  { clave: 'equiposDetenidos', titulo: 'Equipos Detenidos / Novedades', tipo: 'tabla',
+    columnas: [['cliente', 'Cliente'], ['equipo', 'Equipo'], ['falla', 'Falla'],
+               ['estado', 'Estado'], ['observacion', 'Obs.']] },
+  { clave: 'metricasClave', titulo: 'Métricas Clave', tipo: 'tabla',
+    columnas: [['metrica', 'Métrica'], ['valor', 'Valor'], ['observacion', 'Observación']] },
+  { clave: 'ordenesImportantes', titulo: 'Órdenes Importantes Recibidas', tipo: 'tabla',
+    columnas: [['cliente', 'Cliente'], ['monto', 'Monto']] },
+  { clave: 'estadoContratos', titulo: 'Estado de Contratos (Convenios)', tipo: 'tabla',
+    columnas: [['asesor', 'ASESOR'], ['meta', 'META'], ['vigentes', 'VIGENTES'],
+               ['cumplimiento', '% CUMPL.'], ['vencidos', 'VENCIDOS']] },
+  { clave: 'notasCredito', titulo: 'Notas Crédito, Quejas y Reclamos', tipo: 'texto' }
+];
+
+/**
+ * 🧭 DIRECCIÓN — TEMAS REPORTADOS POR LOS DIRECTORES
+ *
+ * Las demás secciones son temáticas: cruzan áreas y se quedan con lo
+ * excepcional. Ésta es nominal y exhaustiva —un bloque por director, todos sus
+ * temas— porque la gerencia necesita poder leer entero lo que reportó cada
+ * dirección, sin que un filtro de relevancia decida por ella.
+ *
+ * Las tablas se reproducen como tablas: una cifra en tabla se audita; disuelta
+ * en un párrafo, no.
+ */
+function seccionDireccion_(consolidado) {
+  var L = ['## 🧭 DIRECCIÓN — TEMAS REPORTADOS POR LOS DIRECTORES', ''];
+  var directores = consolidado.areas['Directores'] || [];
+
+  if (!directores.length) {
+    L.push('_Ningún director reportó esta semana._');
+    L.push('');
+    return L.join('\n');
+  }
+
+  for (var d = 0; d < directores.length; d++) {
+    var reg = directores[d];
+    L.push('### ' + reg.nombre);
+    L.push('');
+
+    for (var t = 0; t < TEMAS_DIRECCION.length; t++) {
+      var tema = TEMAS_DIRECCION[t];
+      L.push('**' + tema.titulo + '**');
+      L.push('');
+
+      if (tema.tipo === 'texto') {
+        var valor = textoDe_(reg, tema.clave);
+        L.push(valor || '_Sin novedades reportadas._');
+        L.push('');
+        continue;
+      }
+
+      var filas = filasDe_(reg, tema.clave);
+      if (!filas.length) {
+        L.push('_Sin novedades reportadas._');
+        L.push('');
+        continue;
+      }
+
+      var titulos = tema.columnas.map(function (c) { return c[1]; });
+      L.push('| ' + titulos.join(' | ') + ' |');
+      L.push('|' + titulos.map(function () { return '---'; }).join('|') + '|');
+      for (var f = 0; f < filas.length; f++) {
+        var celdas = tema.columnas.map(function (c) {
+          return texto_(filas[f][c[0]]) || '—';
+        });
+        L.push('| ' + celdas.join(' | ') + ' |');
+      }
+      L.push('');
+    }
+  }
+
+  return L.join('\n');
 }
 
 /** 🚨 ALERTAS CRÍTICAS Y CUELLOS DE BOTELLA */
@@ -709,10 +794,23 @@ function construirInforme_(anio, semana, usarIa) {
 
     // Si alguna imagen no se pudo enviar, la gerencia debe saberlo: el informe
     // se redactó sin ella.
-    var aviso = '';
+    var avisos = [];
     if (ia.imagenesOmitidas && ia.imagenesOmitidas.length) {
-      aviso = 'Gemini leyó ' + ia.imagenesLeidas + ' imagen(es). No se pudieron ' +
-              'incluir: ' + ia.imagenesOmitidas.join('; ') + '.';
+      avisos.push('Gemini leyó ' + ia.imagenesLeidas + ' imagen(es). No se pudieron ' +
+                  'incluir: ' + ia.imagenesOmitidas.join('; ') + '.');
+    }
+
+    // Si el modelo falló en el primer intento y lo corrigió en el segundo, el
+    // informe que va a salir ya está limpio, pero el administrador debe saber
+    // que hizo falta corregirlo: es la señal de que conviene mirar esa semana
+    // con algo más de atención.
+    var corregido = ia.corregido || [];
+    if (corregido.length) {
+      avisos.push('La primera redacción del modelo tenía defectos (' +
+                  corregido.join(', ') + '); se le pidió corregirlos y el texto ' +
+                  'enviado ya no los contiene.');
+      console.warn('Informe de la semana ' + consolidado.semana +
+                   ' corregido. Defectos de la primera redacción: ' + corregido.join(', '));
     }
 
     return {
@@ -720,7 +818,9 @@ function construirInforme_(anio, semana, usarIa) {
       fuente: 'ia',
       consolidado: consolidado,
       imagenesLeidas: ia.imagenesLeidas || 0,
-      aviso: aviso
+      cifrasSinRespaldo: ia.cifrasSinRespaldo || [],
+      corregido: corregido,
+      aviso: avisos.join(' ')
     };
   }
 

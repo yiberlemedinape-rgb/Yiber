@@ -627,12 +627,17 @@ ok(S.areaDeCargo_('Administrador SAU') === 'SAU, Renta, CDR',
 
 ok(S.esAdministrador_() === false,
    'con su cargo de área, Yiber no es administrador');
+
+/* La hoja es la ÚNICA fuente del permiso: ni siquiera el propietario del libro
+   entra por la puerta de atrás. */
 LIBRO.propietario = 'yiber.medina@kaeser.com';
-ok(S.esAdministrador_() === true,
-   'mientras nadie tenga el cargo, el propietario del libro puede operar');
+ok(S.esAdministrador_() === false,
+   'ser propietario del libro NO otorga el rol: sólo cuenta el cargo');
+ok(S.correosAdmin_().length === 0, 'y la hoja no reporta ningún administrador');
+
 fijarCargo('luis.rodriguez@kaeser.com', 'Administrador');
 ok(S.esAdministrador_() === false,
-   'en cuanto la hoja nombra un Administrador, el propietario ya NO basta');
+   'que otro tenga el cargo tampoco se lo da a Yiber');
 fijarCargo('yiber.medina@kaeser.com', 'ADMINISTRADOR');
 ok(S.esAdministrador_() === true,
    'cambiar el cargo en la hoja otorga el permiso, sin tocar código');
@@ -641,6 +646,7 @@ try { S.exigirAdministrador_(); } catch (e) { sinPermiso = true; }
 ok(sinPermiso === false, 'exigirAdministrador_ deja pasar al administrador');
 
 fijarCargo('yiber.medina@kaeser.com', 'SAU, Renta, CDR');
+LIBRO.propietario = null;
 ok(S.esAdministrador_() === false, 'y devolverle su cargo de área se lo quita');
 sinPermiso = false;
 let mensajePermiso = '';
@@ -1212,6 +1218,142 @@ ok(fuenteJs.indexOf("zona.addEventListener('click', function () { entrada.click(
 ok(/texto: '📁 Elegir archivo'[\s\S]{0,80}entrada\.click\(\)/.test(fuenteJs),
    'elegir archivo es un botón aparte');
 
+/* ===== 21. Veracidad: cifras contrastadas contra lo reportado ===== */
+console.log('\n[21] Ninguna cifra del informe puede salir de la nada');
+
+const datosFuente = S.datosParaIa_(S.consolidarSemana_(P.anio, P.semana));
+
+ok(S.cifrasSinRespaldo_(
+     'Se facturaron **$3.900.000.000**, el 92% de la meta.', datosFuente).length === 0,
+   'una cifra que sí está en los datos no se señala');
+ok(S.cifrasSinRespaldo_(
+     'El equipo **EMR-4412** sigue detenido.', datosFuente).length === 0,
+   'ni un código de equipo real');
+
+const inventadas = S.cifrasSinRespaldo_(
+  'Se facturaron **$7.777.777.777** y el equipo **EMR-9999** está detenido.', datosFuente);
+ok(inventadas.indexOf('EMR-9999') >= 0, 'un código de equipo inexistente se detecta', inventadas);
+ok(inventadas.indexOf('7.777.777.777') >= 0, 'y un importe que nadie reportó', inventadas);
+
+ok(S.cifrasSinRespaldo_('Se atendieron 27 casos en 12 días.', datosFuente).length === 0,
+   'los conteos cortos no se revisan: sólo generarían ruido');
+ok(S.cifrasSinRespaldo_('Facturación de $3.900 millones.', datosFuente).length === 0,
+   'un importe reescrito en otra escala se reconoce igual');
+
+/* No basta con detectar: hay que impedir que salga. Si el modelo inventa, se le
+   pide corregir señalándole la cifra concreta; si insiste, se descarta su
+   redacción y sale el informe determinista, que no puede inventar nada. */
+PROPS.GEMINI_API_KEY = 'clave-de-prueba';
+const inventado = '## 📋 RESUMEN EJECUTIVO\nCerramos **$8.888.888.888** con **Cementos Argos**.';
+const limpio = '## 📋 RESUMEN EJECUTIVO\nCerramos **$3.900.000.000**, 92% de la meta.';
+
+let peticiones = [];
+FETCH = (url, opciones) => {
+  peticiones.push(JSON.parse(opciones.payload));
+  return respuestaHttp(200, {
+    candidates: [{
+      content: { parts: [{ text: peticiones.length === 1 ? inventado : limpio }] },
+      finishReason: 'STOP'
+    }]
+  });
+};
+const corregido = S.construirInforme_(P.anio, P.semana, true);
+ok(peticiones.length === 2, 'una cifra inventada provoca un segundo intento', peticiones.length);
+ok(peticiones[1].contents[0].parts[0].text.indexOf('8.888.888.888') >= 0,
+   'y al modelo se le dice exactamente qué cifra se inventó');
+ok(corregido.fuente === 'ia' && corregido.markdown.indexOf('8.888.888.888') < 0,
+   'el informe que sale ya no contiene la cifra inventada');
+ok(corregido.aviso.indexOf('primera redacción') >= 0,
+   'pero el administrador queda enterado de que hubo que corregirlo', corregido.aviso);
+
+/* El mismo ciclo protege de que el informe remita al lector a un archivo, que
+   es el otro defecto que una instrucción sola no logra evitar. */
+ok(S.lenguajeDeAdjuntos_('El FTF fue del 87,5%.').length === 0,
+   'un informe limpio no dispara la alarma');
+['Ver imagen adjunta para el detalle.', 'Según el archivo de convenios.',
+ 'Se adjunta la gráfica de FTF.', 'Revisar ftf.png.',
+ 'Disponible en https://drive.google.com/drive/folders/abc'
+].forEach(frase => ok(S.lenguajeDeAdjuntos_(frase).length > 0,
+  'se detecta: "' + frase + '"'));
+
+peticiones = [];
+FETCH = (url, opciones) => {
+  peticiones.push(JSON.parse(opciones.payload));
+  return respuestaHttp(200, {
+    candidates: [{
+      content: { parts: [{ text: peticiones.length === 1
+        ? '## 📋 RESUMEN EJECUTIVO\nEl FTF aparece en la imagen adjunta.'
+        : limpio }] },
+      finishReason: 'STOP'
+    }]
+  });
+};
+const sinAdjuntos = S.construirInforme_(P.anio, P.semana, true);
+ok(peticiones.length === 2, 'remitir a un adjunto también provoca la corrección');
+ok(peticiones[1].contents[0].parts[0].text.indexOf('remiten al lector a un archivo') >= 0,
+   'y se le explica por qué no sirve: la gerencia no tiene esos archivos');
+ok(sinAdjuntos.markdown.indexOf('imagen adjunta') < 0,
+   'el informe enviado ya no remite a ningún archivo');
+
+/* Si insiste, no se envía su redacción: gana el informe construido desde la hoja. */
+peticiones = [];
+FETCH = (url, opciones) => {
+  peticiones.push(1);
+  return respuestaHttp(200, {
+    candidates: [{ content: { parts: [{ text: inventado }] }, finishReason: 'STOP' }]
+  });
+};
+const descartado = S.construirInforme_(P.anio, P.semana, true);
+ok(peticiones.length === 2, 'se reintenta una sola vez, no en bucle', peticiones.length);
+ok(descartado.fuente === 'datos',
+   'si el modelo insiste, se descarta su redacción entera', descartado.fuente);
+ok(descartado.markdown.indexOf('8.888.888.888') < 0,
+   'y la cifra inventada no llega al correo bajo ningún concepto');
+ok(descartado.aviso.indexOf('mantuvo defectos') >= 0,
+   'el motivo del descarte queda explicado', descartado.aviso);
+
+/* Y las directrices deben prohibirlo explícitamente, no sólo la comprobación. */
+const D = S.DIRECTRICES_INFORME;
+ok(D.indexOf('VERACIDAD') >= 0, 'las directrices abren con la regla de veracidad');
+ok(D.indexOf('estimar') >= 0 && D.indexOf('aproximar') >= 0,
+   'prohíben estimar y aproximar');
+ok(D.indexOf('No calcules cifras nuevas') >= 0,
+   'y calcular cifras que no vengan dadas, que es lo que vuelve auditable el informe');
+ok(D.indexOf('sin dato reportado') >= 0, 'e indican qué escribir cuando el dato falta');
+
+/* ===== 22. Detalle de lo reportado por los directores ===== */
+console.log('\n[22] El informe detalla los temas de los directores');
+
+ok(D.indexOf('## 🧭 DIRECCIÓN — TEMAS REPORTADOS POR LOS DIRECTORES') >= 0,
+   'las directrices piden una sección propia para dirección');
+ok(D.indexOf('seis títulos') >= 0, 'y la estructura pasa a seis secciones');
+ok(D.indexOf('EXHAUSTIVA') >= 0, 'exigiendo que no se resuma ni se descarte un tema');
+
+/* El informe determinista debe traer la misma sección: si Gemini no responde,
+   la gerencia no puede quedarse sin el detalle de dirección. */
+const seccionDir = S.seccionDireccion_(S.consolidarSemana_(P.anio, P.semana));
+ok(seccionDir.indexOf('### Luis Rodriguez') >= 0,
+   'un subtítulo por cada director que reportó');
+S.TEMAS_DIRECCION.forEach(t => ok(seccionDir.indexOf('**' + t.titulo + '**') >= 0,
+  'incluye el bloque "' + t.titulo + '"'));
+ok(seccionDir.indexOf('| ASESOR | META | VIGENTES | % CUMPL. | VENCIDOS |') >= 0,
+   'las tablas se reproducen como tablas, con sus columnas originales');
+ok(seccionDir.indexOf('| Facturación acumulada | 3.900.000.000 | 92% de la meta del mes |') >= 0,
+   'y los valores van exactos, sin redondear ni reescribir');
+ok(seccionDir.indexOf('Sin novedades reportadas') >= 0,
+   'y un tema sin datos se declara en vez de desaparecer');
+
+const detMd = S.construirInforme_(P.anio, P.semana, false).markdown;
+ok(detMd.indexOf('## 🧭 DIRECCIÓN') > detMd.indexOf('## 📋 RESUMEN EJECUTIVO'),
+   'la sección va después del resumen ejecutivo');
+ok(detMd.indexOf('## 🧭 DIRECCIÓN') < detMd.indexOf('## 🚨 ALERTAS'),
+   'y antes de las alertas');
+ok(S.construirInforme_(P.anio, P.semana, false).markdown.match(/^## /gm).length === 6,
+   'el informe determinista trae las seis secciones',
+   detMd.match(/^## /gm).length);
+
+delete PROPS.GEMINI_API_KEY;
+
 /* ===== 20. Prueba contra la API real (opcional) =====
    Se activa sólo si hay una clave en el entorno, nunca en el repositorio:
 
@@ -1250,14 +1392,32 @@ if (process.env.GEMINI_API_KEY) {
   if (real.ok) {
     const t = real.markdown;
     ok(real.imagenesLeidas === 4, 'y leyó las 4 imágenes de la semana', real.imagenesLeidas);
-    ['RESUMEN EJECUTIVO', 'ALERTAS CRÍTICAS', 'GESTIÓN COMERCIAL',
+    ['RESUMEN EJECUTIVO', 'DIRECCIÓN', 'ALERTAS CRÍTICAS', 'GESTIÓN COMERCIAL',
      'OPERACIONES, SAU Y SOPORTE TÉCNICO', 'DESARROLLO DE PERSONAL'
     ].forEach(titulo => ok(t.indexOf(titulo) >= 0,
       'el modelo real incluye la sección "' + titulo + '"'));
 
-    ok(t.indexOf('imagen adjunta') < 0 && t.indexOf('ver adjunto') < 0 &&
-       t.indexOf('.png') < 0,
-       'no remite al lector a ningún adjunto ni nombra archivos');
+    /* Veracidad: la comprobación mecánica sobre lo que escribió el modelo real.
+       Es la única forma de saber si las directrices se están respetando. */
+    ok(real.cifrasSinRespaldo.length === 0,
+       'ninguna cifra del informe real sale de fuera de los datos reportados',
+       real.cifrasSinRespaldo.join(', '));
+    // Al fallar, la cifra sola no dice nada: hay que ver en qué frase la metió.
+    real.cifrasSinRespaldo.forEach(c => {
+      const linea = t.split('\n').find(l => l.indexOf(c) >= 0);
+      console.log('      ↳ ' + c + ' → ' + String(linea || '').trim().slice(0, 160));
+    });
+
+    /* Detalle de dirección: los temas del director, con sus cifras exactas. */
+    const dir = t.slice(t.indexOf('DIRECCIÓN'), t.indexOf('ALERTAS CRÍTICAS'));
+    ok(dir.indexOf('Luis Rodriguez') >= 0, 'la sección de dirección nombra al director');
+    ok(dir.indexOf('3.900.000.000') >= 0,
+       'y reproduce su cifra de facturación exacta, sin redondear');
+    ok(dir.indexOf('|') >= 0, 'sus tablas se reproducen como tablas Markdown');
+
+    ok(S.lenguajeDeAdjuntos_(t).length === 0,
+       'no remite al lector a ningún adjunto ni nombra archivos',
+       S.lenguajeDeAdjuntos_(t).join(', '));
     ok(/\*\*/.test(t), 'usa negritas como pide la directriz de formato');
     ok(t.length > 800, 'el informe tiene cuerpo, no es una respuesta corta', t.length);
 

@@ -140,9 +140,26 @@ var DIRECTRICES_INFORME =
   'TONO: ejecutivo, objetivo, analítico y orientado a la toma de decisiones.\n\n' +
   'FORMATO: Markdown. Usa viñetas para facilitar la lectura y negritas para ' +
   'resaltar nombres de clientes, valores monetarios ($) y números de equipo (EMR).\n\n' +
-  'ESTRUCTURA OBLIGATORIA (usa exactamente estos cinco títulos, en este orden):\n' +
+  'ESTRUCTURA OBLIGATORIA (usa exactamente estos seis títulos, en este orden):\n' +
   '## 📋 RESUMEN EJECUTIVO (Semana Actual)\n' +
   'Un párrafo conciso con el pulso general de la operación y las ventas a nivel nacional.\n' +
+  '## 🧭 DIRECCIÓN — TEMAS REPORTADOS POR LOS DIRECTORES\n' +
+  'Desarrollo detallado de lo que reportó cada director, agrupado **por director** ' +
+  '(un subtítulo "### <nombre>" por cada uno). Bajo cada director, un bloque por ' +
+  'cada tema que haya reportado, con el mismo nombre con que lo entregó: ' +
+  'Novedades de Personal y Desempeño, Visitas a Clientes y Actividades, Equipos ' +
+  'Detenidos / Novedades, Métricas Clave, Órdenes Importantes Recibidas, Estado ' +
+  'de Contratos (Convenios) y Notas Crédito, Quejas y Reclamos.\n' +
+  '- Esta sección es EXHAUSTIVA: no resumas ni descartes un tema por parecer ' +
+  'menor. Si un director reportó ocho visitas, van las ocho.\n' +
+  '- Las tablas que entregaron —equipos detenidos, métricas clave, estado de ' +
+  'contratos, órdenes— reprodúcelas como **tablas Markdown**, con sus columnas ' +
+  'originales y sus valores exactos. Una cifra en tabla es auditable; disuelta en ' +
+  'un párrafo, no.\n' +
+  '- Después de cada tabla, una o dos viñetas con la lectura gerencial de esos ' +
+  'datos: qué cambia, qué exige decisión. Ese análisis es tuyo; las cifras no.\n' +
+  '- Si un director no reportó un tema, escribe "Sin novedades reportadas" en vez ' +
+  'de omitir el encabezado: el vacío también es información para la gerencia.\n' +
   '## 🚨 ALERTAS CRÍTICAS Y CUELLOS DE BOTELLA\n' +
   'Equipos detenidos críticos (SAU / Directores / Soporte Técnico), OS con demoras ' +
   'severas (DPA), riesgos comerciales (KAM) y problemas de personal o vacantes críticas.\n' +
@@ -154,8 +171,29 @@ var DIRECTRICES_INFORME =
   '(ingresos/reprocesos) y novedades del centro de monitoreo.\n' +
   '## 👥 DESARROLLO DE PERSONAL\n' +
   'Avance en contrataciones y resumen de capacitaciones técnicas impartidas.\n\n' +
+  'VERACIDAD — LA REGLA QUE MANDA SOBRE TODAS LAS DEMÁS:\n' +
+  'Este informe se lee para tomar decisiones sobre dinero, clientes y personas. ' +
+  'Una cifra inventada es peor que una cifra ausente, porque nadie la audita hasta ' +
+  'que ya se decidió con ella. Antes de escribir cualquier dato, comprueba que ' +
+  'esté literalmente en el JSON o en una imagen que te fue entregada.\n' +
+  '- **Está prohibido inventar, estimar, aproximar o completar.** Ni cifras, ni ' +
+  'nombres de clientes, ni números de equipo (EMR), ni fechas, ni porcentajes, ni ' +
+  'nombres de personas, ni causas de una falla.\n' +
+  '- **No calcules cifras nuevas.** Nada de totales, promedios, variaciones, ' +
+  'proyecciones ni porcentajes que no vengan dados. Si la gerencia necesita un ' +
+  'total que no está reportado, es más útil que lo note a que tú lo supongas.\n' +
+  '- Copia los valores **exactamente como se reportaron**, con sus mismas ' +
+  'unidades y su misma precisión. No redondees "95,8 %" a "96 %" ni ' +
+  '"$4.587.300" a "$4,6 millones".\n' +
+  '- Si un dato falta, escribe "sin dato reportado". Si un dato es ambiguo o ' +
+  'ilegible, dilo en una frase. Nunca rellenes el hueco.\n' +
+  '- No atribuyas a un área o a una persona nada que no haya reportado ella.\n' +
+  '- Distingue siempre el **dato** del **análisis**. El dato debe poder rastrearse ' +
+  'hasta lo reportado; el análisis es tuyo y debe leerse como interpretación ' +
+  '("esto sugiere", "conviene revisar"), nunca como un hecho medido.\n' +
+  'Un informe corto y verificable cumple su función. Uno completo pero con una ' +
+  'cifra inventada, no.\n\n' +
   'REGLAS:\n' +
-  '- Trabaja únicamente con los datos entregados. No inventes cifras, clientes ni equipos.\n' +
   '- Si un área no reportó, dilo explícitamente en una línea en vez de omitirla.\n' +
   '- Prioriza lo excepcional sobre lo rutinario: la gerencia lee esto para decidir.\n' +
   '- No incluyas preámbulos ni cierres; empieza directamente en el primer título.\n\n' +

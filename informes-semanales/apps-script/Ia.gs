@@ -285,8 +285,17 @@ function motivoGemini_(codigo) {
 }
 
 /**
- * Pide al modelo el cuerpo del informe (las cinco secciones obligatorias).
- * @return {Object} { ok, markdown?, motivo? }
+ * Pide al modelo el cuerpo del informe (las seis secciones obligatorias) y no lo
+ * da por bueno hasta comprobar que sus cifras existen en lo reportado.
+ *
+ * El ciclo es: redactar → contrastar → si hay cifras inventadas, pedir una
+ * corrección señalándolas → contrastar de nuevo → si insiste, descartar su
+ * redacción y devolver el control al informe determinista.
+ *
+ * Devolver `ok: false` no es un fallo del sistema: es el sistema negándose a
+ * enviarle a la gerencia una cifra que nadie reportó.
+ *
+ * @return {Object} { ok, markdown?, motivo?, corregido? }
  */
 function informeConIa_(consolidado) {
   var clave = apiKey_();
@@ -314,11 +323,89 @@ function informeConIa_(consolidado) {
 
   var partes = [{ text: mensaje }].concat(imagenes.partes);
 
+  var intento = generarMarkdown_(partes, clave);
+  if (!intento.ok) return intento;
+
+  // Comprobación de veracidad. Las directrices se lo prohíben, pero una
+  // instrucción es una petición, no una garantía: medido contra la API real, en
+  // torno a una de cada cuatro redacciones colaba alguna cifra inventada.
+  var sinRespaldo = cifrasSinRespaldo_(intento.markdown, datos);
+  var remiteAdjuntos = lenguajeDeAdjuntos_(intento.markdown);
+  var defectos = sinRespaldo.concat(remiteAdjuntos);
+
+  if (defectos.length) {
+    // Segundo intento, señalándole exactamente qué se inventó. Decirle "no
+    // inventes" otra vez no sirve; decirle "escribiste 850.000.000 y no existe"
+    // sí, porque convierte la regla abstracta en un error concreto que corregir.
+    var correccion = mensaje + '\n\nCORRECCIÓN OBLIGATORIA de tu respuesta anterior.';
+    if (sinRespaldo.length) {
+      correccion += '\n\nEscribiste estas cifras, que NO aparecen en los datos ' +
+        'entregados: ' + sinRespaldo.join(', ') + '.\nVuelve a redactar el informe ' +
+        'completo eliminando toda cifra, cliente o equipo que no esté literalmente ' +
+        'en el JSON o en las imágenes. Donde te falte el dato, escribe "sin dato ' +
+        'reportado". No rellenes el hueco.';
+    }
+    if (remiteAdjuntos.length) {
+      correccion += '\n\nEscribiste estas expresiones, que remiten al lector a un ' +
+        'archivo: ' + remiteAdjuntos.join(', ') + '.\nLa gerencia sólo recibe este ' +
+        'texto: no tiene los archivos ni va a abrirlos. Sustituye cada una por la ' +
+        'cifra o el hecho concreto que hayas leído en la imagen. Si no lograste ' +
+        'leerlo, dilo en una frase; nunca remitas a un adjunto.';
+    }
+
+    var segundo = generarMarkdown_(
+      [{ text: correccion }].concat(imagenes.partes), clave);
+    if (!segundo.ok) return segundo;
+
+    var restantes = cifrasSinRespaldo_(segundo.markdown, datos)
+      .concat(lenguajeDeAdjuntos_(segundo.markdown));
+    if (restantes.length) {
+      // Se descarta la redacción del modelo. El informe determinista sale
+      // directamente de la hoja, así que no puede contener nada que nadie haya
+      // reportado: ante la duda, se prefiere un informe más seco pero cierto.
+      return {
+        ok: false,
+        motivo: 'El modelo mantuvo defectos que invalidan el informe (' +
+                restantes.join(', ') + '). Se descartó su redacción y se envió el ' +
+                'informe automático, construido sólo con datos de la hoja.'
+      };
+    }
+
+    return {
+      ok: true,
+      markdown: segundo.markdown,
+      imagenesLeidas: imagenes.incluidas,
+      imagenesOmitidas: imagenes.omitidas,
+      cifrasSinRespaldo: [],
+      corregido: defectos
+    };
+  }
+
+  return {
+    ok: true,
+    markdown: intento.markdown,
+    imagenesLeidas: imagenes.incluidas,
+    imagenesOmitidas: imagenes.omitidas,
+    cifrasSinRespaldo: []
+  };
+}
+
+/**
+ * Una llamada a Gemini: envía las partes y devuelve el Markdown que produjo.
+ * Separada de `informeConIa_` porque la comprobación de veracidad necesita poder
+ * pedir una segunda redacción con las mismas condiciones.
+ *
+ * @return {Object} { ok, markdown?, motivo? }
+ */
+function generarMarkdown_(partes, clave) {
   var cuerpo = {
     systemInstruction: { parts: [{ text: DIRECTRICES_INFORME }] },
     contents: [{ role: 'user', parts: partes }],
     generationConfig: {
-      temperature: 0.35,
+      // Muy baja a propósito. El informe no debe ser creativo: debe repetir con
+      // fidelidad lo reportado. Cada décima de temperatura es margen para que el
+      // modelo "redondee" una cifra o complete un nombre a medias.
+      temperature: 0.05,
       topP: 0.95,
       maxOutputTokens: CONFIG.IA_MAX_TOKENS,
       // En los modelos 2.5 los tokens de razonamiento consumen maxOutputTokens.
@@ -398,10 +485,90 @@ function informeConIa_(consolidado) {
     markdown += '\n\n_(El análisis se truncó por límite de tokens de salida.)_';
   }
 
-  return {
-    ok: true,
-    markdown: markdown,
-    imagenesLeidas: imagenes.incluidas,
-    imagenesOmitidas: imagenes.omitidas
+  return { ok: true, markdown: markdown };
+}
+
+/**
+ * Contrasta las cifras del informe contra los datos reportados y devuelve las
+ * que no aparecen en ellos.
+ *
+ * Las directrices le prohíben al modelo inventar o calcular cifras, pero una
+ * instrucción es una petición, no una garantía. Esto es la comprobación
+ * mecánica: se extraen del texto los códigos de equipo y los importes largos y
+ * se busca cada uno en el JSON que se le entregó.
+ *
+ * Alcance, dicho sin adornos:
+ *   - Un **código EMR** inexistente se detecta siempre: no se deriva de nada.
+ *   - Un **importe** se busca como secuencia de dígitos, ignorando puntos y
+ *     comas, así que "$3.900.000.000" se reconoce aunque se escriba de otra
+ *     forma. Detecta un monto sacado de la nada, no un monto real mal atribuido
+ *     a otro cliente.
+ *   - Las cifras de menos de cinco dígitos (conteos, porcentajes, días) NO se
+ *     revisan: aparecen legítimamente en el análisis y sólo generarían ruido.
+ *
+ * No sustituye la lectura del administrador; le dice dónde mirar.
+ *
+ * @return {Array<string>} cifras del informe sin respaldo en los datos
+ */
+/**
+ * Frases que remiten al lector a un archivo en vez de darle el dato.
+ *
+ * Las directrices ya lo prohíben, pero —igual que con las cifras— una
+ * instrucción no es una garantía, y aquí el coste de que se cuele es alto: la
+ * gerencia recibe un informe que la manda a abrir algo que no tiene.
+ *
+ * @return {Array<string>} las expresiones encontradas
+ */
+function lenguajeDeAdjuntos_(markdown) {
+  var patrones = [
+    /(?:ver|véase|revisar|consultar|según)\s+(?:la\s+|el\s+)?(?:imagen|captura|archivo|adjunto|gráfica adjunta)/gi,
+    /imagen\s+adjunta/gi,
+    /archivo\s+adjunto/gi,
+    /se\s+adjunta/gi,
+    /\bad(?:junto|juntos|juntas)\s+(?:de\s+la\s+semana|en\s+drive)/gi,
+    /\.(?:png|jpg|jpeg|webp|xlsx?)\b/gi,
+    /drive\.google\.com/gi
+  ];
+
+  var encontrados = [];
+  var vistos = {};
+  for (var i = 0; i < patrones.length; i++) {
+    var coincidencias = String(markdown).match(patrones[i]) || [];
+    for (var j = 0; j < coincidencias.length; j++) {
+      var clave = coincidencias[j].toLowerCase();
+      if (vistos[clave]) continue;
+      vistos[clave] = true;
+      encontrados.push(coincidencias[j]);
+    }
+  }
+  return encontrados;
+}
+
+function cifrasSinRespaldo_(markdown, datos) {
+  var soloDigitos = function (s) { return String(s).replace(/[^0-9]/g, ''); };
+  var fuente = JSON.stringify(datos);
+  var fuenteDigitos = soloDigitos(fuente);
+  var fuenteCodigos = fuente.toUpperCase().replace(/[\s.-]/g, '');
+
+  var sospechosas = [];
+  var vistas = {};
+  var anotar = function (etiqueta) {
+    if (vistas[etiqueta]) return;
+    vistas[etiqueta] = true;
+    sospechosas.push(etiqueta);
   };
+
+  var codigos = String(markdown).toUpperCase().match(/EMR[\s.-]?\d{2,}/g) || [];
+  for (var i = 0; i < codigos.length; i++) {
+    if (fuenteCodigos.indexOf(codigos[i].replace(/[\s.-]/g, '')) < 0) anotar(codigos[i]);
+  }
+
+  var numeros = String(markdown).match(/\d[\d.,]*\d/g) || [];
+  for (var j = 0; j < numeros.length; j++) {
+    var digitos = soloDigitos(numeros[j]);
+    if (digitos.length < 5) continue;
+    if (fuenteDigitos.indexOf(digitos) < 0) anotar(numeros[j]);
+  }
+
+  return sospechosas;
 }

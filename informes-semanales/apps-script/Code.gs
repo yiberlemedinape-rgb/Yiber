@@ -111,7 +111,23 @@ function menuVerificarApi() {
                   : 'no instalado; el informe no saldrá solo'));
     lineas.push('');
 
-    // 5. Insumos de la semana en curso.
+    // 5. Que la hoja siga teniendo quién opere el sistema.
+    //
+    // El permiso vive sólo en la columna Cargo, así que borrar o cambiar esa
+    // celda deja el envío manual sin nadie que pueda ejecutarlo. El automático
+    // no se ve afectado —lo dispara el disparador, no una persona—, y por eso
+    // este punto avisa en vez de alarmar.
+    var admins = correosAdmin_();
+    if (!admins.length) problemas++;
+    lineas.push((admins.length ? '✅ ' : '❌ ') + 'ADMINISTRADORES — ' +
+                (admins.length
+                  ? admins.join(', ')
+                  : 'ninguna fila de la hoja "' + CONFIG.HOJA_USUARIOS +
+                    '" tiene el cargo "' + CONFIG.CARGO_ADMIN + '"; nadie podrá ' +
+                    'enviar el informe a mano (el envío automático sigue igual)'));
+    lineas.push('');
+
+    // 6. Insumos de la semana en curso.
     var p = periodoActual_();
     var consolidado = consolidarSemana_(p.anio, p.semana);
     var imagenes = contarAdjuntosSemana_(p.anio, p.semana);
@@ -194,7 +210,7 @@ function menuEstado() {
       'Copias: ' + (props.getProperty(CONFIG.PROP_COPIA_INFORME) || '—'),
       'Administradores (cargo "' + CONFIG.CARGO_ADMIN + '" en la hoja "' +
         CONFIG.HOJA_USUARIOS + '"): ' + (admins.length ? admins.join(', ')
-        : '⚠️ ninguno; por ahora sólo el propietario del libro puede operar'),
+        : '⚠️ ninguno; nadie puede enviar el informe a mano'),
       'Redacción con IA: ' + (iaDisponible_()
         ? 'activa (' + modeloIa_() + ')' : 'inactiva (informe automático)'),
       'Zona horaria: ' + CONFIG.ZONA_HORARIA,
