@@ -1386,8 +1386,19 @@ if (process.env.GEMINI_API_KEY) {
   PROPS.CORREO_GERENTE = 'gerencia@kaeser.com';
 
   const real = S.informeConIa_(S.consolidarSemana_(P.anio, P.semana));
-  ok(real.ok === true, 'la API real acepta la clave y devuelve un informe',
-     real.ok ? '' : real.motivo);
+
+  /* Quedarse sin cuota no es un defecto del código: es el plan de la clave. Se
+     omite la sección en vez de teñir de rojo una suite que está sana, porque un
+     fallo que no señala nada que arreglar acaba enseñando a ignorar los fallos.
+     Ojo: esta prueba consume cuota, y ejecutarla en bucle agota la del día. */
+  const sinCuota = !real.ok && String(real.motivo).indexOf('429') >= 0;
+  if (sinCuota) {
+    console.log('  ⏭️  omitida: cuota de la API agotada. Reintenta cuando se ' +
+                'restablezca (el plan gratuito la renueva a diario).');
+  } else {
+    ok(real.ok === true, 'la API real acepta la clave y devuelve un informe',
+       real.ok ? '' : real.motivo);
+  }
 
   if (real.ok) {
     const t = real.markdown;

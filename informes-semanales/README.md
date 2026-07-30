@@ -760,7 +760,10 @@ API simulada podía revelarlo, porque la respuesta simulada la escribo yo.
 
 > ⚠️ **Cuota.** El plan gratuito de la API limita las peticiones diarias. Para la
 > operación real es irrelevante —una o dos llamadas por semana—, pero ejecutar
-> esta prueba en bucle agota la cuota del día.
+> esta prueba en bucle agota la cuota del día. Cuando eso pasa, la sección se
+> **omite** con un aviso en vez de fallar: quedarse sin cuota no señala nada que
+> arreglar en el código, y un fallo que no señala nada acaba enseñando a ignorar
+> los fallos.
 
 Ejecútalo antes de tocar el `ESQUEMA`: si renombras una clave o una columna,
 las pruebas lo detectan de inmediato.
